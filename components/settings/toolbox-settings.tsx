@@ -33,7 +33,7 @@ import {
     REAL_PHONE_BRIDGE_CAPABILITY_ID,
     TOOLBOX_MANAGEMENT_CAPABILITY_ID,
 } from "@/lib/internal-capability-storage";
-import { buildRealPhonePairingCode, clearRealPhoneBridgeConfig, createRealPhoneBridgeConfig, loadRealPhoneBridgeConfig, type RealPhoneBridgeConfig } from "@/lib/real-phone-bridge";
+import { buildRealPhonePairingCode, createRealPhoneBridgeConfig, loadRealPhoneBridgeConfig, revokeRealPhoneBridge, type RealPhoneBridgeConfig } from "@/lib/real-phone-bridge";
 import { discoverMcpTools, startMcpOAuth } from "@/lib/tool-executor";
 import { SettingsContext } from "@/components/phone-settings-app";
 import { Toggle, Input, Textarea, Select } from "@/components/ui/form";
@@ -1696,8 +1696,8 @@ export function ToolboxSettings() {
                                             <button
                                                 type="button"
                                                 className="ui-btn ui-btn-outline flex-1"
-                                                onClick={() => {
-                                                    clearRealPhoneBridgeConfig();
+                                                onClick={async () => {
+                                                    await revokeRealPhoneBridge();
                                                     const next = createRealPhoneBridgeConfig();
                                                     setPhoneBridgeConfig(next);
                                                 }}

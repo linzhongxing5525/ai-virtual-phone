@@ -56,3 +56,16 @@ export async function GET(request: NextRequest) {
     }
     return NextResponse.json({ updatedAt: record.updatedAt, envelope: record.envelope }, { headers: { "cache-control": "no-store" } });
 }
+
+export async function DELETE(request: NextRequest) {
+    const id = normalizeId(request.nextUrl.searchParams.get("id"));
+    const token = readAuthToken(request);
+    if (!id || !token) return NextResponse.json({ error: "配对凭据无效" }, { status: 401 });
+    const bridgeStore = store();
+    const record = await bridgeStore.get(id, { type: "json" }) as { authHash?: string } | null;
+    if (!record?.authHash || !hashesEqual(record.authHash, authHash(token))) {
+        return NextResponse.json({ error: "未找到已配对手机或密钥不匹配" }, { status: 404 });
+    }
+    await bridgeStore.delete(id);
+    return NextResponse.json({ ok: true });
+}

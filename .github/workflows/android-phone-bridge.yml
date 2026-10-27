@@ -9,7 +9,7 @@ on:
       - ".github/workflows/android-phone-bridge.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -31,3 +31,10 @@ jobs:
           name: starforest-phone-bridge-apk
           path: android-phone-bridge/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 90
+      - name: Publish stable APK download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android-phone-bridge/app/build/outputs/apk/debug/app-debug.apk starforest-phone-bridge.apk
+          gh release view phone-bridge-latest >/dev/null 2>&1 || gh release create phone-bridge-latest --title "Starforest 手机助手" --notes "Android 真实手机只读加密桥接助手。请仅从本仓库下载并按需授权。"
+          gh release upload phone-bridge-latest starforest-phone-bridge.apk --clobber

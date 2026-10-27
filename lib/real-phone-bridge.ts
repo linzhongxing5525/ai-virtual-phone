@@ -54,6 +54,18 @@ export function clearRealPhoneBridgeConfig(): void {
     kvRemove(REAL_PHONE_BRIDGE_KEY);
 }
 
+export async function revokeRealPhoneBridge(): Promise<void> {
+    const config = loadRealPhoneBridgeConfig();
+    if (config) {
+        const authToken = await bridgeAuthToken(config.secret);
+        await fetch(`/api/phone-bridge/snapshot?id=${encodeURIComponent(config.bridgeId)}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${authToken}` },
+        }).catch(() => null);
+    }
+    clearRealPhoneBridgeConfig();
+}
+
 export function buildRealPhonePairingCode(config: RealPhoneBridgeConfig): string {
     return btoa(JSON.stringify({ v: 1, i: config.bridgeId, s: config.secret, u: window.location.origin }));
 }
