@@ -1441,17 +1441,39 @@ function MusicSettingsTab({ onBack, onSaved }: { onBack: () => void; onSaved: ()
                     </div>
                 )}
 
-                {/* QR Login Section */}
+                {/* NetEase account session */}
                 {config.baseUrl.trim() && (
                     <div className="music-settings-section music-qr-section">
                         <div className="music-settings-label">网易云账号登录</div>
-                        <div className="music-settings-hint">登录后可播放 VIP 歌曲（需扫码）</div>
+                        <div className="music-settings-hint">
+                            {config.baseUrl.startsWith("/api/music/netease")
+                                ? "账号已由站点服务端安全托管，无需在浏览器重复扫码"
+                                : "登录后可播放账号有权限的歌曲"}
+                        </div>
 
                         {loginNickname ? (
-                            <div className="music-qr-logged">
-                                <span className="music-qr-nickname">{loginNickname}</span>
-                                <span className="music-qr-badge">已登录</span>
-                            </div>
+                            <>
+                                <div className="music-qr-logged">
+                                    <span className="music-qr-nickname">{loginNickname}</span>
+                                    <span className="music-qr-badge">已登录</span>
+                                </div>
+                                <div className="music-settings-actions" style={{ marginTop: '8px' }}>
+                                    <button
+                                        className="music-settings-btn"
+                                        onClick={startQrLogin}
+                                        disabled={qrPolling}
+                                    >
+                                        {qrPolling ? "等待扫码中..." : "扫码切换账号"}
+                                    </button>
+                                </div>
+                                {qrImg && (
+                                    <div className="music-qr-wrap">
+                                        <img src={qrImg} alt="QR Code" className="music-qr-img" />
+                                    </div>
+                                )}
+                            </>
+                        ) : config.baseUrl.startsWith("/api/music/netease") ? (
+                            <div className="music-qr-status">正在读取服务端登录状态…</div>
                         ) : (
                             <>
                                 <div className="music-settings-actions" style={{ marginTop: '8px' }}>
@@ -1476,7 +1498,7 @@ function MusicSettingsTab({ onBack, onSaved }: { onBack: () => void; onSaved: ()
                     </div>
                 )}
 
-                {loginNickname && (
+                {loginNickname && !config.baseUrl.startsWith("/api/music/netease") && (
                     <div className="music-settings-actions" style={{ marginTop: 20 }}>
                         <button
                             className="music-settings-btn"

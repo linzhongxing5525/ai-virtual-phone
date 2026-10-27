@@ -22,17 +22,33 @@ const ALLOWED_MODULES = new Set([
     "artist_top_song",
     "check_music",
     "cloudsearch",
+    "comment",
+    "comment_floor",
     "comment_music",
     "comment_playlist",
+    "like",
+    "likelist",
+    "login_qr_check",
+    "login_qr_create",
+    "login_qr_key",
+    "login_status",
     "lyric",
+    "personal_fm",
     "personalized",
     "playlist_detail",
+    "playlist_subscribe",
     "playlist_track_all",
+    "playlist_tracks",
+    "recommend_resource",
+    "recommend_songs",
     "search",
     "search_hot_detail",
     "song_detail",
     "song_url",
     "toplist_detail",
+    "user_detail",
+    "user_playlist",
+    "user_record",
 ]);
 
 function noStoreHeaders(): HeadersInit {
@@ -92,8 +108,8 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
         return NextResponse.json({ code: 404, message: "Not found" }, { status: 404, headers: noStoreHeaders() });
     }
 
-    const cookie = serverCookie();
-    if (!cookie.MUSIC_U) {
+    const fallbackCookie = serverCookie();
+    if (!fallbackCookie.MUSIC_U) {
         return NextResponse.json(
             { code: 503, message: "网易云账号尚未在 Netlify 配置" },
             { status: 503, headers: noStoreHeaders() },
@@ -102,12 +118,16 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
 
     try {
         const url = new URL(request.url);
+        const clientCookie = url.searchParams.get("cookie") || "";
         url.searchParams.delete("cookie");
         url.searchParams.delete("realIP");
+        const body = await readBody(request);
+        const bodyCookie = typeof body.cookie === "string" ? body.cookie : "";
+        delete body.cookie;
         const query: Record<string, unknown> = {
             ...Object.fromEntries(url.searchParams),
-            ...await readBody(request),
-            cookie,
+            ...body,
+            cookie: clientCookie || bodyCookie || fallbackCookie,
         };
         delete query.realIP;
         const result = await handler(query);
