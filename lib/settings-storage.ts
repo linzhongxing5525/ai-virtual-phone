@@ -908,6 +908,12 @@ export type FollowUpConfig = {
     anxietyFieldName: string;    // 状态值字段名（默认 "焦虑值"）
     anxietyMinDelay: number;     // 最短延迟 秒（焦虑=100 时，默认 15）
     anxietyMaxDelay: number;     // 最长延迟 秒（焦虑=阈值时，默认 180）
+    proactiveEnabled: boolean;   // 日常主动联系（与焦虑追发相互独立）
+    proactiveCharacterId: string; // 留空时使用最近聊天的单聊角色
+    proactiveMinMinutes: number;
+    proactiveMaxMinutes: number;
+    proactiveQuietStart: number; // 0-23，本地时间
+    proactiveQuietEnd: number;   // 0-23，本地时间
 };
 
 export type ChatSendConfig = {
@@ -926,6 +932,12 @@ export function getDefaultFollowUpConfig(): FollowUpConfig {
         anxietyFieldName: "焦虑值",
         anxietyMinDelay: 15,
         anxietyMaxDelay: 180,
+        proactiveEnabled: false,
+        proactiveCharacterId: "",
+        proactiveMinMinutes: 120,
+        proactiveMaxMinutes: 360,
+        proactiveQuietStart: 23,
+        proactiveQuietEnd: 8,
     };
 }
 
@@ -942,12 +954,24 @@ export function loadFollowUpConfig(): FollowUpConfig {
         if (!raw) return getDefaultFollowUpConfig();
         const parsed = JSON.parse(raw) as Partial<FollowUpConfig>;
         const defaults = getDefaultFollowUpConfig();
+        const proactiveMinMinutes = typeof parsed.proactiveMinMinutes === "number"
+            ? Math.max(30, Math.min(720, Math.round(parsed.proactiveMinMinutes / 30) * 30))
+            : defaults.proactiveMinMinutes;
+        const proactiveMaxMinutes = typeof parsed.proactiveMaxMinutes === "number"
+            ? Math.max(proactiveMinMinutes, Math.min(1440, Math.round(parsed.proactiveMaxMinutes / 30) * 30))
+            : defaults.proactiveMaxMinutes;
         return {
             prompt: typeof parsed.prompt === "string" && parsed.prompt.trim() ? parsed.prompt : defaults.prompt,
             anxietyThreshold: typeof parsed.anxietyThreshold === "number" ? Math.max(0, Math.min(100, parsed.anxietyThreshold)) : defaults.anxietyThreshold,
             anxietyFieldName: typeof parsed.anxietyFieldName === "string" && parsed.anxietyFieldName.trim() ? parsed.anxietyFieldName : defaults.anxietyFieldName,
             anxietyMinDelay: typeof parsed.anxietyMinDelay === "number" ? Math.max(5, Math.min(300, parsed.anxietyMinDelay)) : defaults.anxietyMinDelay,
             anxietyMaxDelay: typeof parsed.anxietyMaxDelay === "number" ? Math.max(15, Math.min(600, parsed.anxietyMaxDelay)) : defaults.anxietyMaxDelay,
+            proactiveEnabled: parsed.proactiveEnabled === true,
+            proactiveCharacterId: typeof parsed.proactiveCharacterId === "string" ? parsed.proactiveCharacterId : defaults.proactiveCharacterId,
+            proactiveMinMinutes,
+            proactiveMaxMinutes,
+            proactiveQuietStart: typeof parsed.proactiveQuietStart === "number" ? Math.max(0, Math.min(23, Math.round(parsed.proactiveQuietStart))) : defaults.proactiveQuietStart,
+            proactiveQuietEnd: typeof parsed.proactiveQuietEnd === "number" ? Math.max(0, Math.min(23, Math.round(parsed.proactiveQuietEnd))) : defaults.proactiveQuietEnd,
         };
     } catch {
         return getDefaultFollowUpConfig();
@@ -957,6 +981,7 @@ export function loadFollowUpConfig(): FollowUpConfig {
 export function saveFollowUpConfig(config: FollowUpConfig): void {
     if (typeof window === "undefined") return;
     kvSet(FOLLOW_UP_CONFIG_KEY, JSON.stringify(config));
+    window.dispatchEvent(new CustomEvent("follow-up-config-updated", { detail: config }));
 }
 
 export function loadChatSendConfig(): ChatSendConfig {

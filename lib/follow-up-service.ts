@@ -20,6 +20,7 @@ import {
 import type { ChatMessage, StateValue } from "./chat-storage";
 import { generateChatCompletion, flattenCompletionResult } from "./chat-engine";
 import { loadFollowUpConfig } from "./settings-storage";
+import { kvGet, kvRemove, kvSet } from "./kv-db";
 import { parseAIResponse } from "./rich-message-parser";
 import type { ParsedMessagePart } from "./rich-message-parser";
 import { isKnownStickerLabel } from "./sticker-data";
@@ -51,6 +52,7 @@ const MAX_FOLLOW_UPS = 10;
 const POLL_INTERVAL_MS = 3000; // check every 3 s
 const PERIOD_CARE_POLL_INTERVAL_MS = 60_000;
 const BACKGROUND_MESSAGE_STAGGER_MS = 800;
+const ROUTINE_PROACTIVE_SCHEDULE_KEY = "ai_phone_routine_proactive_schedule_v1";
 
 function resolveFollowUpSenderName(sessionId: string): string {
     const sess = loadChatSessions().find(s => s.id === sessionId);
@@ -64,12 +66,51 @@ function resolveFollowUpSenderName(sessionId: string): string {
 // ── Module state ───────────────────────────────────────────
 let stopInterval: (() => void) | null = null;
 let periodCareUpdateHandler: (() => void) | null = null;
+let followUpConfigUpdateHandler: (() => void) | null = null;
 const firingSet = new Set<string>(); // sessions currently mid-API-call
 const cancelledWhileFiring = new Set<string>(); // cancelled during in-flight API call
 const timedWakeFiringSet = new Set<string>();
 const periodCareFiringSet = new Set<string>();
 const backgroundReplyFiringSet = new Set<string>();
 let lastPeriodCarePollAt = 0;
+let routineProactiveFiring = false;
+
+type RoutineProactiveSchedule = { nextAt: number };
+
+function loadRoutineProactiveSchedule(): RoutineProactiveSchedule | null {
+    try {
+        const raw = kvGet(ROUTINE_PROACTIVE_SCHEDULE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<RoutineProactiveSchedule>;
+        return typeof parsed.nextAt === "number" && Number.isFinite(parsed.nextAt) ? { nextAt: parsed.nextAt } : null;
+    } catch {
+        return null;
+    }
+}
+
+function scheduleNextRoutineProactive(from = Date.now()): void {
+    const config = loadFollowUpConfig();
+    if (!config.proactiveEnabled) {
+        kvRemove(ROUTINE_PROACTIVE_SCHEDULE_KEY);
+        return;
+    }
+    const min = Math.max(30, config.proactiveMinMinutes);
+    const max = Math.max(min, config.proactiveMaxMinutes);
+    const delayMinutes = min + Math.random() * (max - min);
+    kvSet(ROUTINE_PROACTIVE_SCHEDULE_KEY, JSON.stringify({ nextAt: from + delayMinutes * 60_000 }));
+}
+
+function isQuietHour(hour: number, start: number, end: number): boolean {
+    if (start === end) return false;
+    return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+function nextQuietEnd(now: Date, endHour: number): number {
+    const end = new Date(now);
+    end.setHours(endHour, 0, 0, 0);
+    if (end.getTime() <= now.getTime()) end.setDate(end.getDate() + 1);
+    return end.getTime() + Math.round(Math.random() * 15) * 60_000;
+}
 
 // ── Public API ─────────────────────────────────────────────
 
@@ -83,6 +124,8 @@ export function startFollowUpService() {
             pollMenstrualPeriodCare(Date.now());
         };
         window.addEventListener("menstrual-period-care-updated", periodCareUpdateHandler);
+        followUpConfigUpdateHandler = () => scheduleNextRoutineProactive();
+        window.addEventListener("follow-up-config-updated", followUpConfigUpdateHandler);
     }
 }
 
@@ -91,6 +134,10 @@ export function stopFollowUpService() {
     if (typeof window !== "undefined" && periodCareUpdateHandler) {
         window.removeEventListener("menstrual-period-care-updated", periodCareUpdateHandler);
         periodCareUpdateHandler = null;
+    }
+    if (typeof window !== "undefined" && followUpConfigUpdateHandler) {
+        window.removeEventListener("follow-up-config-updated", followUpConfigUpdateHandler);
+        followUpConfigUpdateHandler = null;
     }
 }
 
@@ -175,6 +222,21 @@ export function cancelFollowUp(sessionId: string) {
     if (firingSet.has(sessionId)) {
         cancelledWhileFiring.add(sessionId);
     }
+    // A real user message restarts the ordinary proactive-contact countdown.
+    scheduleNextRoutineProactive();
+}
+
+/** Queue an immediate routine proactive-contact check (used by the settings test button). */
+export function triggerRoutineProactiveNow(): boolean {
+    const config = loadFollowUpConfig();
+    if (!config.proactiveEnabled || routineProactiveFiring) return false;
+    const session = loadChatSessions()
+        .filter(item => !item.isGroup)
+        .filter(item => !config.proactiveCharacterId || item.contactId === config.proactiveCharacterId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (!session) return false;
+    void fireRoutineProactive(session.id);
+    return true;
 }
 
 // ── Internals ──────────────────────────────────────────────
@@ -208,8 +270,86 @@ function pollSchedules() {
         }
         pollTimedWakeSchedules(now);
         pollMenstrualPeriodCare(now);
+        pollRoutineProactive(now);
     } catch (e) {
         console.error("[FollowUp] pollSchedules error:", e);
+    }
+}
+
+function pollRoutineProactive(now: number) {
+    const config = loadFollowUpConfig();
+    if (!config.proactiveEnabled) {
+        if (loadRoutineProactiveSchedule()) kvRemove(ROUTINE_PROACTIVE_SCHEDULE_KEY);
+        return;
+    }
+    const schedule = loadRoutineProactiveSchedule();
+    if (!schedule) {
+        scheduleNextRoutineProactive(now);
+        return;
+    }
+    if (schedule.nextAt > now || routineProactiveFiring) return;
+
+    const current = new Date(now);
+    if (isQuietHour(current.getHours(), config.proactiveQuietStart, config.proactiveQuietEnd)) {
+        kvSet(ROUTINE_PROACTIVE_SCHEDULE_KEY, JSON.stringify({ nextAt: nextQuietEnd(current, config.proactiveQuietEnd) }));
+        return;
+    }
+
+    const sessions = loadChatSessions()
+        .filter(session => !session.isGroup)
+        .filter(session => !config.proactiveCharacterId || session.contactId === config.proactiveCharacterId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const session = sessions[0];
+    if (!session) {
+        scheduleNextRoutineProactive(now);
+        return;
+    }
+    void fireRoutineProactive(session.id);
+}
+
+async function fireRoutineProactive(sessionId: string) {
+    routineProactiveFiring = true;
+    scheduleNextRoutineProactive();
+    try {
+        const session = loadChatSessions().find(item => item.id === sessionId);
+        if (!session || session.isGroup) return;
+        const latestMessages = loadChatMessages(session.id);
+        const latestAt = latestMessages.length > 0
+            ? new Date(latestMessages[latestMessages.length - 1].createdAt).getTime()
+            : Date.now();
+        const elapsedMinutes = Math.max(1, Math.round((Date.now() - latestAt) / 60_000));
+        const proactiveHint: ChatMessage = {
+            id: `_routine_proactive_${Date.now()}`,
+            sessionId: session.id,
+            role: "system",
+            content: `[现在由你决定是否主动联系对方。距离你们最近一条消息约 ${elapsedMinutes} 分钟。请结合当前时间、最近聊天、你的性格与关系，自然地发起一个有具体动机的联系；不要提到系统、定时器或“主动消息”设置，也不要像客服问候。如果此刻确实不适合打扰，只输出状态值和内心，不发送聊天内容。]`,
+            status: "sent",
+            createdAt: new Date().toISOString(),
+        };
+
+        window.dispatchEvent(new CustomEvent("followup-started", { detail: { sessionId: session.id } }));
+        let reasoning: string | undefined;
+        const aiResponseText = flattenCompletionResult(await generateChatCompletion(
+            session,
+            [...latestMessages, proactiveHint],
+            { appTags: ["chat", "text", "proactive"] },
+            { onReasoning: text => { reasoning = text; } },
+        ));
+        const { hasVisible, stateValues } = await parseAndSaveResponse(
+            aiResponseText,
+            session.id,
+            0,
+            undefined,
+            latestMessages,
+            { reasoningText: reasoning },
+        );
+        if (hasVisible) scheduleFollowUp(session.id, 0, stateValues);
+        window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+    } catch (error) {
+        console.error("[RoutineProactive] Error:", error);
+        // Avoid placing technical failures into the user's conversation.
+    } finally {
+        routineProactiveFiring = false;
     }
 }
 

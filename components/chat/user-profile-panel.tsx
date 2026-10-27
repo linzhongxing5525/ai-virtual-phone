@@ -24,6 +24,7 @@ import { loadCharacters } from "@/lib/character-storage";
 import { triggerImmediatePost } from "@/lib/moments-engine";
 import type { Character } from "@/lib/character-types";
 import { requestNotificationPermission } from "@/lib/browser-notification";
+import { triggerRoutineProactiveNow } from "@/lib/follow-up-service";
 import { kvGet, kvSet, kvRemove } from "@/lib/kv-db";
 import { formatWalletAmount, getWalletBalance, loadWalletState, WALLET_UPDATED_EVENT } from "@/lib/wallet-storage";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
@@ -487,9 +488,12 @@ function ChatCSSEditor({ onBack }: { onBack: () => void }) {
 function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
     const defaults = getDefaultFollowUpConfig();
     const [config, setConfig] = useState<FollowUpConfig>(defaults);
+    const [characters, setCharacters] = useState<Character[]>([]);
+    const [testQueued, setTestQueued] = useState(false);
 
     useEffect(() => {
         setConfig(loadFollowUpConfig());
+        setCharacters(loadCharacters());
     }, []);
 
     const updateConfig = (patch: Partial<FollowUpConfig>) => {
@@ -506,8 +510,99 @@ function FollowUpSettingsEditor({ onBack }: { onBack: () => void }) {
     return (
         <PageShell title="追发设置" onBack={onBack} className="absolute inset-0 z-[100]">
             <div className="page-menu profile-settings-menu">
+                <div className="menu-group">
+                    <div className="menu-item">
+                        <ProfileSettingsIcon icon={MessageSquare} color={BINDING_ACCENTS.voice} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">日常主动联系</span>
+                            <span className="menu-desc">让 Char 在你没有发消息时，自然地主动找你</span>
+                        </div>
+                        <div className="menu-right">
+                            <Toggle checked={config.proactiveEnabled} onChange={checked => updateConfig({ proactiveEnabled: checked })} />
+                        </div>
+                    </div>
+                    {config.proactiveEnabled && (
+                        <>
+                            <label className="menu-item">
+                                <ProfileSettingsIcon icon={User} color={CONTENT_APP_ACCENTS.moments} />
+                                <div className="menu-label-group">
+                                    <span className="menu-label">主动联系角色</span>
+                                    <span className="menu-desc">默认使用最近聊过的单聊角色</span>
+                                </div>
+                                <select
+                                    className="ui-select max-w-[150px]"
+                                    value={config.proactiveCharacterId}
+                                    onChange={event => updateConfig({ proactiveCharacterId: event.target.value })}
+                                >
+                                    <option value="">最近聊天角色</option>
+                                    {characters.map(character => <option key={character.id} value={character.id}>{character.name}</option>)}
+                                </select>
+                            </label>
+                            <ProfileSettingsSliderItem
+                                icon={Clock}
+                                color={CONTENT_APP_ACCENTS.calendar}
+                                label="最短间隔"
+                                desc="每次主动联系后重新随机等待"
+                                value={config.proactiveMinMinutes}
+                                valueLabel={`${Math.round(config.proactiveMinMinutes / 60 * 10) / 10}小时`}
+                                min={30}
+                                max={720}
+                                step={30}
+                                onChange={value => updateConfig({ proactiveMinMinutes: value, proactiveMaxMinutes: Math.max(value, config.proactiveMaxMinutes) })}
+                            />
+                            <ProfileSettingsSliderItem
+                                icon={Clock}
+                                color={BINDING_ACCENTS.voice}
+                                label="最长间隔"
+                                desc="实际时间在最短与最长之间随机"
+                                value={config.proactiveMaxMinutes}
+                                valueLabel={`${Math.round(config.proactiveMaxMinutes / 60 * 10) / 10}小时`}
+                                min={config.proactiveMinMinutes}
+                                max={1440}
+                                step={30}
+                                onChange={value => updateConfig({ proactiveMaxMinutes: value })}
+                            />
+                            <div className="menu-item">
+                                <ProfileSettingsIcon icon={Bell} color={BINDING_ACCENTS.regex} />
+                                <div className="menu-label-group">
+                                    <span className="menu-label">夜间免打扰</span>
+                                    <span className="menu-desc">该时段不生成主动消息</span>
+                                </div>
+                                <div className="menu-right flex items-center gap-1 ts-12">
+                                    <select className="ui-select !w-[62px]" value={config.proactiveQuietStart} onChange={event => updateConfig({ proactiveQuietStart: Number(event.target.value) })}>
+                                        {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{String(hour).padStart(2, "0")}:00</option>)}
+                                    </select>
+                                    <span>至</span>
+                                    <select className="ui-select !w-[62px]" value={config.proactiveQuietEnd} onChange={event => updateConfig({ proactiveQuietEnd: Number(event.target.value) })}>
+                                        {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{String(hour).padStart(2, "0")}:00</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="px-4 py-3 ts-11 leading-relaxed text-[var(--c-text)] opacity-70">
+                                打开“浏览器后台通知”后，网页或已安装的 PWA 在后台时可弹出提醒。若 Android 将 Edge 完全结束，浏览器会停止本地生成，重新打开 Starforest 后会恢复。
+                            </div>
+                            <button
+                                type="button"
+                                className="menu-item"
+                                onClick={() => {
+                                    const queued = triggerRoutineProactiveNow();
+                                    setTestQueued(queued);
+                                    window.setTimeout(() => setTestQueued(false), 3000);
+                                }}
+                            >
+                                <ProfileSettingsIcon icon={Send} color={BINDING_ACCENTS.voice} />
+                                <div className="menu-label-group">
+                                    <span className="menu-label">{testQueued ? "已安排，正在生成…" : "立即测试一次"}</span>
+                                    <span className="menu-desc">用当前所选角色生成一条主动消息</span>
+                                </div>
+                                <ChevronRight size={16} className="text-[var(--c-icon)] opacity-50" />
+                            </button>
+                        </>
+                    )}
+                </div>
+
                 <p className="menu-group-desc mx-2">
-                    延迟计算：焦虑值={config.anxietyThreshold} → {config.anxietyMaxDelay}秒，焦虑值=100 → {config.anxietyMinDelay}秒，中间线性插值。焦虑值&lt;{config.anxietyThreshold}时不追发。
+                    下面是“连续追发”：角色刚回复后，焦虑值达到阈值时可能继续补发，与上面的日常主动联系互相独立。
                 </p>
                 <div className="menu-group">
                     <div className="menu-item">

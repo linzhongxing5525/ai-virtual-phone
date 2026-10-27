@@ -74,6 +74,7 @@ export function sendBrowserNotification(
         body: options?.body,
         icon: options?.icon || "/icon-192.png",
         tag: `ai-phone-${Date.now()}-${_notifCounter++}`,
+        data: { url: "/" },
     };
 
     if ("serviceWorker" in navigator) {
