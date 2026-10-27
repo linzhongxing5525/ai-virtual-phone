@@ -770,6 +770,47 @@ export function VoiceSettings() {
                                             </>
                                         )}
 
+                                        <div className="flex flex-col gap-2 rounded-xl border border-black/10 p-3">
+                                            <div>
+                                                <div className="menu-label font-medium">语音识别（你说话 → 文字）</div>
+                                                <div className="menu-desc mt-1">Android Edge 不能可靠使用系统识别，可单独配置云端识别；它不会改变上面的 MiniMax 男声音色。</div>
+                                            </div>
+                                            <select
+                                                value={config.sttProvider || "Browser"}
+                                                onChange={(e) => updateConfig(config.id, { sttProvider: e.target.value as VoiceApiConfig["sttProvider"] })}
+                                                className="ui-select"
+                                            >
+                                                <option value="Browser">浏览器内置（Chrome 推荐）</option>
+                                                <option value="Groq">Groq Whisper（Edge 推荐）</option>
+                                                <option value="OpenAI">OpenAI 转写</option>
+                                                <option value="Custom">自建 faster-whisper / FunASR</option>
+                                            </select>
+                                            {(config.sttProvider === "Groq" || config.sttProvider === "OpenAI" || config.sttProvider === "Custom") && (
+                                                <>
+                                                    {config.sttProvider === "Custom" && (
+                                                        <Input
+                                                            type="url"
+                                                            value={config.sttBaseUrl || ""}
+                                                            onChange={(e) => updateConfig(config.id, { sttBaseUrl: e.target.value })}
+                                                            placeholder="https://你的转写服务/v1"
+                                                        />
+                                                    )}
+                                                    <Input
+                                                        type="password"
+                                                        value={config.sttApiKey || ""}
+                                                        onChange={(e) => updateConfig(config.id, { sttApiKey: e.target.value })}
+                                                        placeholder={config.sttProvider === "Custom" ? "Bearer Token（如服务不鉴权可留空）" : `${config.sttProvider} API Key`}
+                                                    />
+                                                    <Input
+                                                        type="text"
+                                                        value={config.sttModel || ""}
+                                                        onChange={(e) => updateConfig(config.id, { sttModel: e.target.value || undefined })}
+                                                        placeholder={config.sttProvider === "Groq" ? "whisper-large-v3-turbo（留空即默认）" : config.sttProvider === "OpenAI" ? "gpt-4o-mini-transcribe（留空即默认）" : "whisper-1（留空即默认）"}
+                                                    />
+                                                </>
+                                            )}
+                                        </div>
+
                                         <div className="flex flex-col gap-1">
                                             <label className="menu-desc ml-1">默认音色 (Default Voice) 或 自定义 Voice ID</label>
                                             <div className="flex flex-col gap-2">

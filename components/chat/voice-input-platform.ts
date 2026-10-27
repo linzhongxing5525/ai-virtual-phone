@@ -13,3 +13,8 @@ export function supportsBrowserSpeechRecognition(): boolean {
     };
     return Boolean(speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition);
 }
+
+export function isAndroidEdgeBrowser(): boolean {
+    if (typeof navigator === "undefined") return false;
+    return /Android/i.test(navigator.userAgent) && /EdgA\//i.test(navigator.userAgent);
+}

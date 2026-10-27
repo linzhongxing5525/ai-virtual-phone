@@ -13,7 +13,7 @@ import { BilingualTextBlock } from "./message-bubble";
 import { splitBilingualText } from "@/lib/bilingual-text";
 import type { Character } from "@/lib/character-types";
 import { useCallKeyboardOffsetStyle } from "./use-call-keyboard-offset";
-import { supportsBrowserSpeechRecognition } from "./voice-input-platform";
+import { supportsBrowserSpeechRecognition, isAndroidEdgeBrowser } from "./voice-input-platform";
 import { CallVolumeControl } from "./call-volume-control";
 
 // ── Types ───────────────────────────────────────────
@@ -55,7 +55,16 @@ type GroupCallScreenProps = {
 export function GroupCallScreen({ type, session, characters, onEnd, initiator = "user", initiatorName }: GroupCallScreenProps) {
     const [voiceInputSupported, setVoiceInputSupported] = useState(true);
     const androidTextInputOnly = !voiceInputSupported;
-    useEffect(() => setVoiceInputSupported(supportsBrowserSpeechRecognition()), []);
+    useEffect(() => {
+        const cloudConfigured = characters.some(character => {
+            const voiceConfig = resolveVoiceConfig(character.id);
+            return Boolean(
+                (voiceConfig?.sttApiKey && (voiceConfig.sttProvider === "Groq" || voiceConfig.sttProvider === "OpenAI"))
+                || (voiceConfig?.sttBaseUrl && voiceConfig.sttProvider === "Custom"),
+            );
+        });
+        setVoiceInputSupported(cloudConfigured || (supportsBrowserSpeechRecognition() && !isAndroidEdgeBrowser()));
+    }, [characters]);
     const keyboardOffsetStyle = useCallKeyboardOffsetStyle();
     const [callState, setCallState] = useState<CallState>("CONNECTING");
     const hasConnectedRef = useRef(false);
@@ -323,7 +332,7 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
                     else { setInterimText(""); setCallState("IDLE"); }
                 }
             },
-        }, "zh-CN");
+        }, "zh-CN", characters.map(character => resolveVoiceConfig(character.id)).find(config => config?.sttApiKey || config?.sttBaseUrl));
 
         sttRef.current = stt;
         if (stt.isSupported) stt.start();

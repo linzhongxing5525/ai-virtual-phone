@@ -16,7 +16,7 @@ import { splitBilingualText } from "@/lib/bilingual-text";
 import type { Character } from "@/lib/character-types";
 import { useCallKeyboardOffsetStyle } from "./use-call-keyboard-offset";
 import { CallSttWarningDialog, hideCallSttWarningPermanently, isCallSttWarningHidden } from "./call-stt-warning-dialog";
-import { supportsBrowserSpeechRecognition } from "./voice-input-platform";
+import { supportsBrowserSpeechRecognition, isAndroidEdgeBrowser } from "./voice-input-platform";
 import { CallVolumeControl } from "./call-volume-control";
 
 // ── Types ───────────────────────────────────────────
@@ -55,7 +55,14 @@ function stripBilingualForSpeech(text: string): string {
 export function VideoCallScreen({ session, character, onEnd, onConnect, initiator = "user" }: VideoCallScreenProps) {
     const [voiceInputSupported, setVoiceInputSupported] = useState(true);
     const androidTextInputOnly = !voiceInputSupported;
-    useEffect(() => setVoiceInputSupported(supportsBrowserSpeechRecognition()), []);
+    useEffect(() => {
+        const voiceConfig = resolveVoiceConfig(session.contactId);
+        const cloudConfigured = Boolean(
+            (voiceConfig?.sttApiKey && (voiceConfig.sttProvider === "Groq" || voiceConfig.sttProvider === "OpenAI"))
+            || (voiceConfig?.sttBaseUrl && voiceConfig.sttProvider === "Custom"),
+        );
+        setVoiceInputSupported(cloudConfigured || (supportsBrowserSpeechRecognition() && !isAndroidEdgeBrowser()));
+    }, [session.contactId]);
     const keyboardOffsetStyle = useCallKeyboardOffsetStyle();
     const [callState, setCallState] = useState<CallState>("CONNECTING");
     const hasConnectedRef = useRef(false);
@@ -455,7 +462,7 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
                     else { setInterimText(""); setCallState("IDLE"); }
                 }
             },
-        }, "zh-CN");
+        }, "zh-CN", resolveVoiceConfig(session.contactId));
 
         sttRef.current = stt;
         if (stt.isSupported) stt.start();

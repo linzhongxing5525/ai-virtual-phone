@@ -134,6 +134,10 @@ export type VoiceApiConfig = {
     baseUrl?: string;
     region?: string;
     model?: string;
+    /** Speech-to-text is independent from the TTS provider. */
+    sttProvider?: "Browser" | "Groq" | "OpenAI" | "Custom";
+    sttBaseUrl?: string;
+    sttApiKey?: string;
     sttModel?: string;
     defaultVoice: string;
     languageBoost?: string;
