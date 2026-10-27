@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { CallSttWarningDialog, hideCallSttWarningPermanently, isCallSttWarningHidden } from "./call-stt-warning-dialog";
-import { isAndroidBrowser } from "./voice-input-platform";
+import { supportsBrowserSpeechRecognition } from "./voice-input-platform";
 
 // ── Photo Input Modal ─────────────────────────────
 
@@ -330,8 +330,9 @@ interface VoiceRecordModalProps {
 }
 
 export function VoiceRecordModal({ characterId, onSend, onClose }: VoiceRecordModalProps) {
-    const androidTextInputOnlyRef = useRef(isAndroidBrowser());
-    const androidTextInputOnly = androidTextInputOnlyRef.current;
+    const [voiceInputSupported, setVoiceInputSupported] = useState(true);
+    const androidTextInputOnly = !voiceInputSupported;
+    useEffect(() => setVoiceInputSupported(supportsBrowserSpeechRecognition()), []);
     const [state, setState] = useState<"idle" | "recording" | "processing" | "done">("idle");
     const [inputMode, setInputMode] = useState<"voice" | "text">(() => androidTextInputOnly ? "text" : "voice");
     const [interim, setInterim] = useState("");

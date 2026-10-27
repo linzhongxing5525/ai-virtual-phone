@@ -9,14 +9,14 @@ import { generateChatCompletion, flattenCompletionResult } from "@/lib/chat-engi
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { cancelFollowUp } from "@/lib/follow-up-service";
 import { createSTTSession, type STTSession } from "@/lib/stt-service";
-import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob } from "@/lib/tts-service";
+import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob, inferSpeechEmotion } from "@/lib/tts-service";
 import { suspendKeepAliveForCall, resumeKeepAliveAfterCall } from "@/lib/use-weixin-bridge";
 import { BilingualTextBlock } from "./message-bubble";
 import { splitBilingualText } from "@/lib/bilingual-text";
 import type { Character } from "@/lib/character-types";
 import { useCallKeyboardOffsetStyle } from "./use-call-keyboard-offset";
 import { CallSttWarningDialog, hideCallSttWarningPermanently, isCallSttWarningHidden } from "./call-stt-warning-dialog";
-import { isAndroidBrowser } from "./voice-input-platform";
+import { supportsBrowserSpeechRecognition } from "./voice-input-platform";
 import { CallVolumeControl } from "./call-volume-control";
 
 // ── Types ───────────────────────────────────────────
@@ -53,8 +53,9 @@ function stripBilingualForSpeech(text: string): string {
 // ── Component ───────────────────────────────────────
 
 export function VideoCallScreen({ session, character, onEnd, onConnect, initiator = "user" }: VideoCallScreenProps) {
-    const androidTextInputOnlyRef = useRef(isAndroidBrowser());
-    const androidTextInputOnly = androidTextInputOnlyRef.current;
+    const [voiceInputSupported, setVoiceInputSupported] = useState(true);
+    const androidTextInputOnly = !voiceInputSupported;
+    useEffect(() => setVoiceInputSupported(supportsBrowserSpeechRecognition()), []);
     const keyboardOffsetStyle = useCallKeyboardOffsetStyle();
     const [callState, setCallState] = useState<CallState>("CONNECTING");
     const hasConnectedRef = useRef(false);
@@ -393,7 +394,8 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
             const voiceConfig = resolveVoiceConfig(session.contactId);
             if (voiceConfig && !isSpeakerMutedRef.current) {
                 try {
-                    const audioBlob = await synthesizeSpeech(speechText, voiceConfig);
+                    const emotion = inferSpeechEmotion(aiResponseText, speechText);
+                    const audioBlob = await synthesizeSpeech(speechText, voiceConfig, { emotion });
                     if (stateRef.current === "ENDED") return;
                     if (audioBlob && !isSpeakerMutedRef.current) {
                         const { promise, abort } = playAudioBlob(audioBlob);

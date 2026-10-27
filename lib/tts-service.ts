@@ -74,19 +74,97 @@ const MINIMAX_EMOTIONS = new Set([
     "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "neutral", "fluent",
 ]);
 
+const MINIMAX_EMOTION_SPEED: Partial<Record<MinimaxSpeechEmotion, number>> = {
+    happy: 1.03,
+    sad: 0.92,
+    angry: 1.05,
+    fearful: 1.02,
+    disgusted: 0.96,
+    surprised: 1.04,
+    calm: 0.94,
+    fluent: 0.98,
+};
+
+export type MinimaxSpeechEmotion = "happy" | "sad" | "angry" | "fearful" | "disgusted" | "surprised" | "calm" | "neutral" | "fluent";
+
+const SPEECH_EMOTION_ALIASES: Record<string, MinimaxSpeechEmotion> = {
+    happy: "happy", joy: "happy", joyful: "happy", excited: "happy", cheerful: "happy",
+    开心: "happy", 高兴: "happy", 喜悦: "happy", 兴奋: "happy", 甜蜜: "happy",
+    sad: "sad", sorrow: "sad", sorrowful: "sad", depressed: "sad",
+    难过: "sad", 伤心: "sad", 悲伤: "sad", 失落: "sad", 委屈: "sad",
+    angry: "angry", mad: "angry", furious: "angry",
+    生气: "angry", 愤怒: "angry", 恼火: "angry", 暴躁: "angry",
+    fearful: "fearful", fear: "fearful", scared: "fearful", worried: "fearful", anxious: "fearful", nervous: "fearful",
+    害怕: "fearful", 恐惧: "fearful", 担心: "fearful", 焦虑: "fearful", 紧张: "fearful",
+    disgusted: "disgusted", disgust: "disgusted", 厌恶: "disgusted", 嫌弃: "disgusted",
+    surprised: "surprised", surprise: "surprised", shocked: "surprised",
+    惊讶: "surprised", 震惊: "surprised", 意外: "surprised",
+    calm: "calm", gentle: "calm", tender: "calm", soft: "calm", shy: "calm", romantic: "calm",
+    平静: "calm", 冷静: "calm", 温柔: "calm", 害羞: "calm", 深情: "calm", 宠溺: "calm",
+    fluent: "fluent", natural: "fluent", 自然: "fluent", 流畅: "fluent",
+    neutral: "neutral", normal: "neutral", 中性: "neutral", 普通: "neutral",
+};
+
+function mapSpeechEmotion(value: string | undefined): MinimaxSpeechEmotion | undefined {
+    if (!value) return undefined;
+    const normalized = value.trim().toLowerCase();
+    if (SPEECH_EMOTION_ALIASES[normalized]) return SPEECH_EMOTION_ALIASES[normalized];
+    for (const [alias, emotion] of Object.entries(SPEECH_EMOTION_ALIASES)) {
+        if (normalized.includes(alias)) return emotion;
+    }
+    return undefined;
+}
+
+/**
+ * Resolve the emotion the model explicitly returned, then use conservative
+ * speech cues as a fallback. Keeping this here gives calls and custom voice
+ * features one MiniMax-compatible vocabulary.
+ */
+export function inferSpeechEmotion(rawResponse: string, speechText = ""): MinimaxSpeechEmotion {
+    const explicitPatterns = [
+        /["']emotion["']\s*:\s*["']([^"']+)["']/i,
+        /<emotion>\s*([^<]+)\s*<\/emotion>/i,
+        /\[(?:情绪|emotion)\s*[：:]\s*([^\]]+)\]/i,
+        /(?:^|\n)\s*(?:情绪|emotion)\s*[：:]\s*([^\n,，。]+)/i,
+    ];
+    for (const pattern of explicitPatterns) {
+        const mapped = mapSpeechEmotion(rawResponse.match(pattern)?.[1]);
+        if (mapped) return mapped;
+    }
+
+    const text = speechText.trim();
+    const cueGroups: Array<[RegExp, MinimaxSpeechEmotion]> = [
+        [/(哈哈|嘿嘿|嘻嘻|开心|高兴|太好了|真棒|喜欢你|爱你|❤|❤️|[😊😄😁🥰])/u, "happy"],
+        [/(呜|难过|伤心|对不起|舍不得|想哭|[😢😭])/u, "sad"],
+        [/(生气|够了|闭嘴|可恶|混蛋|[😠😡])/u, "angry"],
+        [/(害怕|别走|担心|小心|紧张|不安|[😨😰])/u, "fearful"],
+        [/(什么[？?!！]|真的吗|居然|竟然|没想到|[😮😲])/u, "surprised"],
+        [/(慢慢来|没关系|别怕|乖|抱抱|陪着你|晚安|安心|放心)/u, "calm"],
+    ];
+    for (const [pattern, emotion] of cueGroups) {
+        if (pattern.test(text)) return emotion;
+    }
+    return "fluent";
+}
+
 async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {
     if (!config.apiKey) throw new Error("Minimax API Key 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.minimaxi.com/v1").replace(/\/$/, "");
+    const normalizedEmotion = emotion?.trim().toLowerCase();
+    const supportedEmotion = normalizedEmotion && MINIMAX_EMOTIONS.has(normalizedEmotion)
+        ? normalizedEmotion as MinimaxSpeechEmotion
+        : undefined;
     const voiceSetting: Record<string, unknown> = {
         voice_id: config.defaultVoice || "male-qn-qingse",
-        speed: 1.0,
+        // A small tempo change makes cloned voices sound conversational while
+        // staying subtle enough not to distort the speaker identity.
+        speed: supportedEmotion ? (MINIMAX_EMOTION_SPEED[supportedEmotion] ?? 1.0) : 1.0,
         vol: 1.0,
         pitch: 0,
     };
-    const normalizedEmotion = emotion?.trim().toLowerCase();
-    if (normalizedEmotion && MINIMAX_EMOTIONS.has(normalizedEmotion)) {
-        voiceSetting.emotion = normalizedEmotion;
+    if (supportedEmotion) {
+        voiceSetting.emotion = supportedEmotion;
     }
 
     const response = await fetchWithTimeout(`${baseUrl}/t2a_v2`, {

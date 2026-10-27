@@ -7,13 +7,13 @@ import { parseAIResponse } from "@/lib/rich-message-parser";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { cancelFollowUp } from "@/lib/follow-up-service";
 import { createSTTSession, type STTSession } from "@/lib/stt-service";
-import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob } from "@/lib/tts-service";
+import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob, inferSpeechEmotion } from "@/lib/tts-service";
 import { suspendKeepAliveForCall, resumeKeepAliveAfterCall } from "@/lib/use-weixin-bridge";
 import { BilingualTextBlock } from "./message-bubble";
 import { splitBilingualText } from "@/lib/bilingual-text";
 import type { Character } from "@/lib/character-types";
 import { useCallKeyboardOffsetStyle } from "./use-call-keyboard-offset";
-import { isAndroidBrowser } from "./voice-input-platform";
+import { supportsBrowserSpeechRecognition } from "./voice-input-platform";
 import { CallVolumeControl } from "./call-volume-control";
 
 // ── Types ───────────────────────────────────────────
@@ -53,8 +53,9 @@ type GroupCallScreenProps = {
 // ── Component ───────────────────────────────────────
 
 export function GroupCallScreen({ type, session, characters, onEnd, initiator = "user", initiatorName }: GroupCallScreenProps) {
-    const androidTextInputOnlyRef = useRef(isAndroidBrowser());
-    const androidTextInputOnly = androidTextInputOnlyRef.current;
+    const [voiceInputSupported, setVoiceInputSupported] = useState(true);
+    const androidTextInputOnly = !voiceInputSupported;
+    useEffect(() => setVoiceInputSupported(supportsBrowserSpeechRecognition()), []);
     const keyboardOffsetStyle = useCallKeyboardOffsetStyle();
     const [callState, setCallState] = useState<CallState>("CONNECTING");
     const hasConnectedRef = useRef(false);
@@ -252,7 +253,8 @@ export function GroupCallScreen({ type, session, characters, onEnd, initiator = 
                 const voiceConfig = resolveVoiceConfig(r.characterId);
                 if (voiceConfig && speechText.trim()) {
                     try {
-                        const audioBlob = await synthesizeSpeech(speechText, voiceConfig);
+                        const emotion = inferSpeechEmotion(r.responseText, speechText);
+                        const audioBlob = await synthesizeSpeech(speechText, voiceConfig, { emotion });
                         if (stateRef.current === "ENDED") return;
                         if (audioBlob) {
                             const { promise, abort } = playAudioBlob(audioBlob);
