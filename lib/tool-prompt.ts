@@ -6,6 +6,24 @@ export type ToolSchemaFormatContext = {
     userName?: string;
 };
 
+const TOOL_USE_POLICY_LINES = [
+    "可用动作是真实能力，不是供你复述或假装执行的说明。",
+    "你可以在自然聊天中主动使用已开启的只读动作，不必等用户说出“调用工具”或准确动作名。只要当前话题明显会因真实数据更自然、更准确或更贴心，就先选择最合适的动作，再把结果自然带回对话。",
+    "当回复依赖当前、私人或外部数据，或需要真正执行某件事时，必须先调用动作；禁止凭记忆猜测、编造结果或只口头声称已经完成。",
+    "主动调用必须与当前话题有关，不要无目的地遍历工具或窥探无关私人数据。查询通知、手机状态、日历、音乐等只读信息可以主动进行；发送、写入、删除、支付或影响他人的动作必须有明确的用户意图，不要擅自扩大范围。",
+    "收到动作结果后，用符合角色性格和当前语境的自然语言回应，不要像系统日志一样罗列；失败时如实说明，不要把失败说成成功。",
+];
+
+export function formatNativeToolUsePolicy(tools: EnabledTool[]): string {
+    if (tools.length === 0) return "";
+    return [
+        "<tool_use_policy>",
+        ...TOOL_USE_POLICY_LINES,
+        `本轮可用能力类别：${tools.map(tool => tool.name).join("、")}。具体参数与用途以请求中的 tools 定义为准。`,
+        "</tool_use_policy>",
+    ].join("\n");
+}
+
 function expandToolMacros(text: string, context?: ToolSchemaFormatContext): string {
     if (!context) return text;
     const engine = new MacroEngine(context.characterName ?? "", context.userName ?? "用户");
@@ -23,9 +41,11 @@ export function formatToolsForPrompt(tools: EnabledTool[]): string {
 
     return [
         "<available_actions>",
-        "下面是系统可自动处理的动作类别，只在需要时按格式输出动作指令，不需要时正常聊天即可：",
+        "下面是系统可自动处理的真实动作类别：",
         "",
         toolList,
+        "",
+        ...TOOL_USE_POLICY_LINES,
         "",
         "使用步骤：",
         "1. 需要系统处理某个动作类别时，先用 [获取指令:动作类别名] 获取可执行动作格式。",

@@ -57,7 +57,7 @@ import { maybeRunSummarization } from "./memory-summarizer";
 import { prepareShortTermContext } from "./short-term-assembler";
 import { parseActionTags, dispatchActions } from "./action-parser";
 import { findEnabledToolForSchema, getEnabledTools, type EnabledTool } from "./tool-storage";
-import { formatToolsForPrompt, formatToolSchema } from "./tool-prompt";
+import { formatNativeToolUsePolicy, formatToolsForPrompt, formatToolSchema } from "./tool-prompt";
 import { parseToolCalls, parseToolFetches, executeToolCalls, formatToolResults } from "./tool-executor";
 import type { ToolCall, ToolResult } from "./tool-executor";
 import { getCustomStickerNames, getCustomStickerExample } from "./custom-sticker-storage";
@@ -1828,8 +1828,14 @@ export async function buildChatPromptMessages(
     const effectiveAppTags = mergeAppTags(options?.appTags, promptProfile?.appTags, resolvedAppId);
     const toolsAllowed = options?.toolsAllowed !== false && !isOfflineMode;
     const enabledTools = toolsAllowed ? getEnabledTools(resolvedAppId) : [];
+    // 普通聊天里，用户在工具箱中明确启用某项能力就代表允许角色使用。
+    // 不再要求当前预设必须保留 {{tools}} 宏，否则导入/切换预设后角色会在
+    // UI 显示“已启用”的同时完全看不到工具。自定义 APP 仍保留宏门控，避免
+    // 把共享工具意外注入只需要纯文本生成的场景。
     const toolsEnabled = enabledTools.length > 0
-        && (options?.forceEnableTools === true || presetIncludesToolsMacro(preset, resolvedAppId, effectiveAppTags));
+        && (resolvedAppId === "chat"
+            || options?.forceEnableTools === true
+            || presetIncludesToolsMacro(preset, resolvedAppId, effectiveAppTags));
     const usesNativeActions = Boolean(toolsEnabled && nativeToolProtocolForConfig(config));
     const { recentBlocks, truncatedHistory, wbActivationContext, unifiedRecentItems } = prepareShortTermContext(character.id, resolvedAppId, {
         history: historyForPrompt,
@@ -1920,6 +1926,12 @@ export async function buildChatPromptMessages(
         offlineSummaryTag: preset?.story_summary_tag?.trim() || "summary",
         nativeToolHistory: usesNativeActions,
     });
+    if (usesNativeActions) {
+        llmMessages.unshift({
+            role: "system",
+            content: formatNativeToolUsePolicy(enabledTools),
+        });
+    }
     if (promptProfile?.output === "plain_text") {
         llmMessages.push({
             role: "system",
