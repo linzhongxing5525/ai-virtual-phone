@@ -35,6 +35,11 @@ const nextConfig = {
   },
   outputFileTracingIncludes: {
     "/api/**": ["./data/**"],
+    "/api/music/netease/**": [
+      "./node_modules/NeteaseCloudMusicApi/module/**",
+      "./node_modules/NeteaseCloudMusicApi/util/**",
+      "./node_modules/NeteaseCloudMusicApi/data/**",
+    ],
   },
   webpack: (config, { isServer, webpack }) => {
     if (!isServer) {
