@@ -22,6 +22,7 @@ function resolveDistDir() {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typedRoutes: true,
+  serverExternalPackages: ["NeteaseCloudMusicApi"],
   outputFileTracingRoot: projectRoot,
   distDir: resolveDistDir(),
   eslint: {
