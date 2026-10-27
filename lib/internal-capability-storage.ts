@@ -12,6 +12,7 @@ export const SEND_FILE_CAPABILITY_ID = "send_file";
 export const LOCAL_DATA_LIBRARY_CAPABILITY_ID = "local_data_library";
 export const TOOLBOX_MANAGEMENT_CAPABILITY_ID = "toolbox_management";
 export const TIMED_WAKE_CAPABILITY_ID = "timed_wake";
+export const REAL_PHONE_BRIDGE_CAPABILITY_ID = "real_phone_bridge";
 
 export type InternalToolDefinition = {
     name: string;
@@ -738,6 +739,56 @@ const LOCAL_DATA_LIBRARY_USAGE_GUIDE = [
     '[执行动作:读取资料记录({"path":"/chat/indexeddb/AiPhoneChatDB/messages","key":"msg_xxx","fields":["id","content"]})]',
 ].join("\n");
 
+const REAL_PHONE_QUERY_SCHEMA = JSON.stringify({
+    type: "object",
+    properties: {
+        section: {
+            type: "string",
+            enum: ["status", "notifications", "contacts", "sms", "calls", "media", "calendar", "location", "usage"],
+            description: "要查看的真实手机数据类别",
+        },
+        query: { type: "string", description: "可选关键词，只返回匹配记录" },
+        limit: { type: "number", description: "最多返回条数，默认 30，最大 100" },
+    },
+    required: ["section"],
+});
+
+const REAL_PHONE_BRIDGE_SUBTOOLS: InternalToolDefinition[] = [
+    {
+        name: "查看真实手机状态",
+        description: "查看已配对 Android 手机的同步时间、设备信息和各项授权状态。",
+        parameterSchema: JSON.stringify({ type: "object", properties: {} }),
+    },
+    {
+        name: "查询真实手机数据",
+        description: "只读查询用户明确授权并由 Android 助手加密同步的通知、联系人、短信、通话、媒体、日历、位置或应用使用情况。",
+        parameterSchema: REAL_PHONE_QUERY_SCHEMA,
+    },
+];
+
+const REAL_PHONE_BRIDGE_USAGE_GUIDE = [
+    "以下是你获取指令的返回结果：",
+    "服务：真实手机桥接",
+    "用途：只读查看{{user}}明确授权的真实 Android 手机数据。所有数据由手机助手端加密同步；未授权类别不可读取。",
+    "",
+    "隐私规则：",
+    "- 只在对话确实需要、或{{user}}明确让你查看时调用；禁止无目的地批量翻阅。",
+    "- 这是只读能力，不能删除、修改、发送短信、拨号、转账或操作其他 App。",
+    "- 微信、QQ 等第三方 App 的私有聊天无法通过普通 Android 权限直接读取；通知里出现的预览除外。",
+    "- 先调用“查看真实手机状态”确认配对、同步时间和权限，再按需查询具体类别。",
+    "",
+    "动作：查看真实手机状态",
+    "参数：无",
+    "示例：[执行动作:查看真实手机状态({})]",
+    "",
+    "动作：查询真实手机数据",
+    "参数：",
+    "  - section: notifications|contacts|sms|calls|media|calendar|location|usage",
+    "  - query: 可选关键词",
+    "  - limit: 默认30，最大100",
+    "示例：[执行动作:查询真实手机数据({\"section\":\"notifications\",\"query\":\"微信\",\"limit\":20})]",
+].join("\n");
+
 const TOOLBOX_REST_TOOL_PROPERTIES = {
     name: { type: "string", description: "工具名称，必须唯一" },
     description: { type: "string", description: "工具用途说明，会展示给 AI" },
@@ -1222,6 +1273,15 @@ const BUILTIN_INTERNAL_CAPABILITIES: InternalCapabilityConfig[] = [
         createdAt: 0,
         updatedAt: 0,
     },
+    {
+        id: REAL_PHONE_BRIDGE_CAPABILITY_ID,
+        name: "真实手机桥接",
+        description: "只读查看你在 Android 助手中逐项授权的真实手机数据；数据端到端加密同步，默认关闭。",
+        enabled: false,
+        mode: "auto",
+        createdAt: 0,
+        updatedAt: 0,
+    },
 ];
 
 export function loadInternalCapabilities(): InternalCapabilityConfig[] {
@@ -1317,6 +1377,14 @@ export function getInternalCapabilityToolDefinition(capability: InternalCapabili
             usageGuide: TIMED_WAKE_USAGE_GUIDE,
         };
     }
+    if (capability.id === REAL_PHONE_BRIDGE_CAPABILITY_ID) {
+        return {
+            name: capability.name,
+            description: capability.description,
+            parameterSchema: "{}",
+            usageGuide: REAL_PHONE_BRIDGE_USAGE_GUIDE,
+        };
+    }
     return null;
 }
 
@@ -1339,6 +1407,9 @@ export function getInternalCapabilitySubToolDefinition(
     if (capability.id === TOOLBOX_MANAGEMENT_CAPABILITY_ID) {
         return TOOLBOX_MANAGEMENT_SUBTOOLS.find(tool => tool.name === name) ?? null;
     }
+    if (capability.id === REAL_PHONE_BRIDGE_CAPABILITY_ID) {
+        return REAL_PHONE_BRIDGE_SUBTOOLS.find(tool => tool.name === name) ?? null;
+    }
     return null;
 }
 
@@ -1359,6 +1430,9 @@ export function getInternalCapabilitySubToolDefinitions(
     }
     if (capability.id === TOOLBOX_MANAGEMENT_CAPABILITY_ID) {
         return TOOLBOX_MANAGEMENT_SUBTOOLS;
+    }
+    if (capability.id === REAL_PHONE_BRIDGE_CAPABILITY_ID) {
+        return REAL_PHONE_BRIDGE_SUBTOOLS;
     }
     return [];
 }

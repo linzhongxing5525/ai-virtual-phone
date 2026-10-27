@@ -1,0 +1,19 @@
+plugins { id "com.android.application" }
+
+android {
+    namespace "com.starforest.phonebridge"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.starforest.phonebridge"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+}
+
+dependencies {
+    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.work:work-runtime:2.10.0"
+}

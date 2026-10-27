@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useContext } from "react";
 import type { ChangeEvent } from "react";
-import { Plus, Trash2, Search, Wrench, AlertCircle, MoreHorizontal, Upload, Download, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Trash2, Search, Wrench, AlertCircle, MoreHorizontal, Upload, Download, ChevronDown, ChevronRight, Copy, Smartphone } from "lucide-react";
 import type {
     CompositeToolConfig,
     CompositeToolPackageConfig,
@@ -30,8 +30,10 @@ import {
     saveInternalCapabilities,
     MUSIC_CONTROL_CAPABILITY_ID,
     NOTE_WALL_CAPABILITY_ID,
+    REAL_PHONE_BRIDGE_CAPABILITY_ID,
     TOOLBOX_MANAGEMENT_CAPABILITY_ID,
 } from "@/lib/internal-capability-storage";
+import { buildRealPhonePairingCode, clearRealPhoneBridgeConfig, createRealPhoneBridgeConfig, loadRealPhoneBridgeConfig, type RealPhoneBridgeConfig } from "@/lib/real-phone-bridge";
 import { discoverMcpTools, startMcpOAuth } from "@/lib/tool-executor";
 import { SettingsContext } from "@/components/phone-settings-app";
 import { Toggle, Input, Textarea, Select } from "@/components/ui/form";
@@ -128,6 +130,8 @@ export function ToolboxSettings() {
     const [isAuthorizing, setIsAuthorizing] = useState(false);
     // MCP 操作结果统一走一次性弹窗，不在编辑页里留常驻文案
     const [mcpNotice, setMcpNotice] = useState<{ title: string; message: string; error?: boolean } | null>(null);
+    const [phoneBridgeConfig, setPhoneBridgeConfig] = useState<RealPhoneBridgeConfig | null>(null);
+    const [pairingCopied, setPairingCopied] = useState(false);
     const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
     const [showExportDialog, setShowExportDialog] = useState(false);
     const [exportSelection, setExportSelection] = useState<string[]>([]);
@@ -147,6 +151,7 @@ export function ToolboxSettings() {
         setCompositePackages(loadCompositeToolPackages());
         setMcpServers(loadMcpServers());
         setInternalCapabilities(loadInternalCapabilities());
+        setPhoneBridgeConfig(loadRealPhoneBridgeConfig());
         refreshCustomAppTools();
     }, []);
 
@@ -198,6 +203,12 @@ export function ToolboxSettings() {
     }
     function updateInternalCapability(id: string, updates: Partial<InternalCapabilityConfig>) {
         persistInternal(internalCapabilities.map(item => item.id === id ? { ...item, ...updates, updatedAt: Date.now() } : item));
+    }
+
+    function ensurePhoneBridgeConfig(): RealPhoneBridgeConfig {
+        const config = phoneBridgeConfig || loadRealPhoneBridgeConfig() || createRealPhoneBridgeConfig();
+        setPhoneBridgeConfig(config);
+        return config;
     }
     async function updateCustomAppToolEnabled(tool: CustomAppToolEntry, enabled: boolean) {
         const now = new Date().toISOString();
@@ -252,11 +263,11 @@ export function ToolboxSettings() {
     }
 
     function defaultInternalMode(id: string): InternalCapabilityConfig["mode"] {
-        return id === NOTE_WALL_CAPABILITY_ID || id === MUSIC_CONTROL_CAPABILITY_ID || id === CALENDAR_MANAGEMENT_CAPABILITY_ID || id === LOCAL_DATA_LIBRARY_CAPABILITY_ID || id === TOOLBOX_MANAGEMENT_CAPABILITY_ID ? "auto" : "confirm";
+        return id === NOTE_WALL_CAPABILITY_ID || id === MUSIC_CONTROL_CAPABILITY_ID || id === CALENDAR_MANAGEMENT_CAPABILITY_ID || id === LOCAL_DATA_LIBRARY_CAPABILITY_ID || id === TOOLBOX_MANAGEMENT_CAPABILITY_ID || id === REAL_PHONE_BRIDGE_CAPABILITY_ID ? "auto" : "confirm";
     }
 
     function isAutoOnlyInternalCapability(id: string): boolean {
-        return id === NOTE_WALL_CAPABILITY_ID || id === MUSIC_CONTROL_CAPABILITY_ID || id === CALENDAR_MANAGEMENT_CAPABILITY_ID || id === LOCAL_DATA_LIBRARY_CAPABILITY_ID || id === TOOLBOX_MANAGEMENT_CAPABILITY_ID;
+        return id === NOTE_WALL_CAPABILITY_ID || id === MUSIC_CONTROL_CAPABILITY_ID || id === CALENDAR_MANAGEMENT_CAPABILITY_ID || id === LOCAL_DATA_LIBRARY_CAPABILITY_ID || id === TOOLBOX_MANAGEMENT_CAPABILITY_ID || id === REAL_PHONE_BRIDGE_CAPABILITY_ID;
     }
 
     function getAutoOnlyCapabilityDetail(id: string): string {
@@ -274,6 +285,9 @@ export function ToolboxSettings() {
         }
         if (id === TOOLBOX_MANAGEMENT_CAPABILITY_ID) {
             return "工具箱管理开启后，角色可以创建和维护它自己写入的 REST 工具、REST 套件、组合工具和组合工具套件；系统会拒绝修改用户手动创建或内置内容。";
+        }
+        if (id === REAL_PHONE_BRIDGE_CAPABILITY_ID) {
+            return "真实手机桥接只读访问 Android 助手中逐项授权的数据。服务器仅保存端到端加密密文；微信、QQ 等第三方 App 的私有聊天无法直接读取。";
         }
         return "这是内置工具能力，开启后角色可以在聊天中按需获取并调用对应工具。";
     }
@@ -1646,6 +1660,60 @@ export function ToolboxSettings() {
             {editInternalId && (() => {
                 const capability = internalCapabilities.find(item => item.id === editInternalId);
                 if (!capability) return null;
+                if (capability.id === REAL_PHONE_BRIDGE_CAPABILITY_ID) {
+                    const config = phoneBridgeConfig;
+                    const pairingCode = config ? buildRealPhonePairingCode(config) : "";
+                    return (
+                        <ContentDialog
+                            title="真实手机桥接"
+                            confirmLabel="完成"
+                            onConfirm={() => setEditInternalId(null)}
+                            onCancel={() => setEditInternalId(null)}
+                        >
+                            <div className="flex flex-col gap-3 text-left">
+                                <div className="ui-group-card">
+                                    <div className="flex items-center gap-2">
+                                        <Smartphone size={18} />
+                                        <span className="menu-label">Android 手机助手配对</span>
+                                    </div>
+                                    <span className="menu-desc !mt-0 leading-relaxed">安装 Starforest 手机助手后，把下方配对码粘贴进去。手机端会逐项申请权限，并将数据加密后同步；服务器看不到明文。</span>
+                                </div>
+                                {config ? (
+                                    <>
+                                        <Textarea value={pairingCode} readOnly className="font-mono text-[11px] min-h-[112px]" />
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                className="ui-btn ui-btn-soft-action flex-1"
+                                                onClick={async () => {
+                                                    await navigator.clipboard.writeText(pairingCode);
+                                                    setPairingCopied(true);
+                                                    window.setTimeout(() => setPairingCopied(false), 2000);
+                                                }}
+                                            >
+                                                <Copy size={14} /> {pairingCopied ? "已复制" : "复制配对码"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="ui-btn ui-btn-outline flex-1"
+                                                onClick={() => {
+                                                    clearRealPhoneBridgeConfig();
+                                                    const next = createRealPhoneBridgeConfig();
+                                                    setPhoneBridgeConfig(next);
+                                                }}
+                                            >
+                                                重新生成
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <button type="button" className="ui-btn ui-btn-soft-action" onClick={ensurePhoneBridgeConfig}>生成配对码</button>
+                                )}
+                                <p className="menu-desc leading-relaxed">仅支持你在 Android 系统中明确允许的数据。微信/QQ 私有聊天、密码、支付信息和其他 App 沙盒数据不可直接读取。关闭此能力后 Char 不再看到查询工具。</p>
+                            </div>
+                        </ContentDialog>
+                    );
+                }
                 if (isAutoOnlyInternalCapability(capability.id)) {
                     return (
                         <ContentDialog

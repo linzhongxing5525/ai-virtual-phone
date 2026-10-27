@@ -22,7 +22,7 @@ import {
     toolNameMatches,
 } from "./tool-storage";
 import { executeCustomAppToolCall } from "./custom-app-tool-runtime";
-import { CALENDAR_MANAGEMENT_CAPABILITY_ID, LOCAL_DATA_LIBRARY_CAPABILITY_ID, MEMORY_WRITE_CAPABILITY_ID, MUSIC_CONTROL_CAPABILITY_ID, NOTE_WALL_CAPABILITY_ID, SEND_FILE_CAPABILITY_ID, TIMED_WAKE_CAPABILITY_ID, TOOLBOX_MANAGEMENT_CAPABILITY_ID, getInternalCapability } from "./internal-capability-storage";
+import { CALENDAR_MANAGEMENT_CAPABILITY_ID, LOCAL_DATA_LIBRARY_CAPABILITY_ID, MEMORY_WRITE_CAPABILITY_ID, MUSIC_CONTROL_CAPABILITY_ID, NOTE_WALL_CAPABILITY_ID, REAL_PHONE_BRIDGE_CAPABILITY_ID, SEND_FILE_CAPABILITY_ID, TIMED_WAKE_CAPABILITY_ID, TOOLBOX_MANAGEMENT_CAPABILITY_ID, getInternalCapability } from "./internal-capability-storage";
 import { loadMemoryEntriesByType, saveMemoryEntry } from "./memory-storage";
 import type { MemoryEntry } from "./memory-types";
 import { loadCharacters } from "./character-storage";
@@ -71,6 +71,7 @@ import {
 import { makeTimedWakeId, saveTimedWakeSchedule } from "./timed-wake-storage";
 import { resolveUserIdentity } from "./settings-storage";
 import { attachAbortSignal, isAbortError, throwIfAborted } from "./abort-utils";
+import { fetchRealPhoneSnapshot, summarizeRealPhoneSnapshot } from "./real-phone-bridge";
 
 // ── Types ─────────────────────────────────────
 
@@ -745,6 +746,7 @@ async function executeInternalTool(call: ToolCall, context?: ToolExecutionContex
     if (isMusicControlToolName(call.name)) return executeMusicControlTool(call, context);
     if (isCalendarToolName(call.name)) return executeCalendarTool(call, context);
     if (isLocalDataToolName(call.name)) return executeLocalDataTool(call);
+    if (isRealPhoneToolName(call.name)) return executeRealPhoneTool(call);
     if (isToolboxManagementToolName(call.name)) return executeToolboxManagementTool(call);
     if (call.name === "发送文件") return executeSendFileTool(call);
     if (call.name === "稍后主动联系" || call.name === "设置定时醒来") return executeTimedWakeTool(call, context);
@@ -796,6 +798,29 @@ function isLocalDataToolName(name: string): boolean {
         || name === "查看资料字段"
         || name === "搜索资料记录"
         || name === "读取资料记录";
+}
+
+function isRealPhoneToolName(name: string): boolean {
+    return name === "查看真实手机状态" || name === "查询真实手机数据";
+}
+
+async function executeRealPhoneTool(call: ToolCall): Promise<ToolResult> {
+    const capability = getInternalCapability(REAL_PHONE_BRIDGE_CAPABILITY_ID);
+    if (!capability || !capability.enabled || capability.mode === "off") {
+        return { name: call.name, success: false, error: "真实手机桥接未启用", userNotice: "真实手机桥接未启用" };
+    }
+    try {
+        const snapshot = await fetchRealPhoneSnapshot();
+        const section = call.name === "查看真实手机状态" ? "status" : requiredStringArg(call.args, "section");
+        const allowed = new Set(["status", "notifications", "contacts", "sms", "calls", "media", "calendar", "location", "usage"]);
+        if (!allowed.has(section)) throw new Error("不支持的真实手机数据类别");
+        if (section !== "status" && snapshot.permissions?.[section] !== true) throw new Error(`手机端尚未授权或同步 ${section}`);
+        const result = summarizeRealPhoneSnapshot(snapshot, section, optionalStringArg(call.args, "query"), Number(call.args.limit) || 30);
+        return { name: call.name, success: true, data: stringifyLocalDataResult(result), userNotice: `${call.name}完成` };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { name: call.name, success: false, error: message, userNotice: `${call.name}失败：${message}` };
+    }
 }
 
 function isToolboxManagementToolName(name: string): boolean {
