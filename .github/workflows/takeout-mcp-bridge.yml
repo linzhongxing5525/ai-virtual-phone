@@ -1,0 +1,27 @@
+name: Publish Starforest takeout MCP bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/takeout-mcp-bridge/**"
+      - ".github/workflows/takeout-mcp-bridge.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package Windows helper
+        run: |
+          cd tools/takeout-mcp-bridge
+          zip -r ../../starforest-takeout-mcp-windows.zip setup.ps1 start.ps1 worker.mjs README.md
+      - name: Publish stable download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view takeout-bridge-latest >/dev/null 2>&1 || gh release create takeout-bridge-latest --title "Starforest 真实外卖 MCP" --notes "Windows 本地外卖助手。账号登录态、地址、手机号和支付口令只保存在用户电脑。"
+          gh release upload takeout-bridge-latest starforest-takeout-mcp-windows.zip --clobber

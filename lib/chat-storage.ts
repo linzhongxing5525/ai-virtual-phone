@@ -105,6 +105,7 @@ export type ChatMessage = {
         | "tool_call"
         | "tool_result"
         | "memory_write_request"
+        | "takeout_order_request"
         | "reading_discuss"
         | "system_instruction"
         | "group_admin_notice"
@@ -193,6 +194,17 @@ export type ChatMessage = {
         memoryReason?: string;    // 记忆写入原因
         memoryImportance?: number;// 记忆写入重要性
         memoryRequestStatus?: "pending" | "approved" | "ignored";
+        takeoutServerId?: string;
+        takeoutJobId?: string;
+        takeoutSummary?: string;
+        takeoutShop?: string;
+        takeoutAddressLabel?: string;
+        takeoutMaskedPhone?: string;
+        takeoutQuantity?: number;
+        takeoutSpecs?: string[];
+        takeoutMaxAmount?: number;
+        takeoutRequestStatus?: "pending" | "processing" | "completed" | "failed" | "canceled";
+        takeoutResultText?: string;
         fileType?: "audio" | "image" | "video" | "file";
         fileName?: string;
         fileDuration?: number;

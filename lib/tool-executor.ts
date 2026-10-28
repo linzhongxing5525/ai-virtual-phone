@@ -110,6 +110,18 @@ export type MediaAttachment = {
     title?: string;
 };
 
+export type TakeoutApprovalRequest = {
+    serverId: string;
+    serverJobId: string;
+    summary: string;
+    shop: string;
+    addressLabel: string;
+    maskedPhone: string;
+    quantity: number;
+    specs: string[];
+    maxAmount: number;
+};
+
 export type ToolResult = {
     name: string;
     success: boolean;
@@ -122,6 +134,7 @@ export type ToolResult = {
     userNotice?: string;
     pendingApproval?: boolean;
     pendingRequest?: MemoryWriteRequest;
+    pendingTakeoutApproval?: TakeoutApprovalRequest;
     mediaAttachments?: MediaAttachment[];
 };
 
@@ -3852,21 +3865,21 @@ async function executeMcpTool(server: McpServerConfig, toolName: string, args: R
             if (retry.error) {
                 return { name: toolName, success: false, error: retry.error.message };
             }
-            return await extractMcpToolResult(toolName, retry.result, signal);
+            return await extractMcpToolResult(toolName, retry.result, signal, server.id);
         }
 
         if (res.error) {
             return { name: toolName, success: false, error: res.error.message };
         }
 
-        return await extractMcpToolResult(toolName, res.result, signal);
+        return await extractMcpToolResult(toolName, res.result, signal, server.id);
     } catch (err) {
         if (isAbortError(err)) throw err;
         return { name: toolName, success: false, error: String(err) };
     }
 }
 
-async function extractMcpToolResult(toolName: string, result: unknown, signal?: AbortSignal): Promise<ToolResult> {
+async function extractMcpToolResult(toolName: string, result: unknown, signal?: AbortSignal, serverId?: string): Promise<ToolResult> {
     throwIfAborted(signal);
     const r = result as { content?: { type?: string; text?: string; data?: string; mimeType?: string }[] } | undefined;
     const textParts: string[] = [];
@@ -3892,6 +3905,27 @@ async function extractMcpToolResult(toolName: string, result: unknown, signal?: 
     const allAttachments = [...mcpAttachments, ...b64Attachments];
 
     const toolResult: ToolResult = { name: toolName, success: true, data: truncate(processed) };
+    if (serverId) {
+        try {
+            const payload = JSON.parse(processed) as Record<string, unknown>;
+            if (payload.kind === "starforest.takeout.approval" && payload.version === 1) {
+                toolResult.pendingTakeoutApproval = {
+                    serverId,
+                    serverJobId: String(payload.serverJobId || ""),
+                    summary: String(payload.summary || "外卖订单"),
+                    shop: String(payload.shop || "自动选择合适店铺"),
+                    addressLabel: String(payload.addressLabel || "家"),
+                    maskedPhone: String(payload.maskedPhone || "本机保存"),
+                    quantity: Math.max(1, Number(payload.quantity) || 1),
+                    specs: Array.isArray(payload.specs) ? payload.specs.map(String) : [],
+                    maxAmount: Math.max(0, Number(payload.maxAmount) || 0),
+                };
+                toolResult.continueConversation = false;
+                toolResult.persistToHistory = false;
+                toolResult.userNotice = "等待确认真实外卖订单";
+            }
+        } catch { /* ordinary MCP text result */ }
+    }
     if (allAttachments.length > 0) {
         toolResult.mediaAttachments = allAttachments;
         const labels = allAttachments.map(a => ({ audio: "音频", image: "图片", video: "视频", file: "文件" })[a.type] || "文件");
@@ -3901,6 +3935,17 @@ async function extractMcpToolResult(toolName: string, result: unknown, signal?: 
             : `${unique.join("/")}已自动发送给用户（共 ${allAttachments.length} 个）。不要再用文字标签描述或重复发送。`;
     }
     return toolResult;
+}
+
+export async function executeMcpServerTool(
+    serverId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+): Promise<ToolResult> {
+    const server = loadMcpServers().find(item => item.id === serverId && item.enabled);
+    if (!server) return { name: toolName, success: false, error: "外卖 MCP 已停用或不存在" };
+    return executeMcpTool(server, toolName, args, signal);
 }
 
 // ── MCP Tool Discovery (with handshake) ───────

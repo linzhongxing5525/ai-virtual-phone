@@ -49,7 +49,7 @@ import { SessionCustomCSS } from "@/components/ui/session-custom-css";
 import { setChatActive } from "@/lib/music-action-queue";
 import { getMusicControlBridge } from "@/lib/music-control-bridge";
 import { findPlayableMatch, getNeteaseLyrics, getNeteaseSongDetail } from "@/lib/music-service";
-import { approveMemoryWriteRequest } from "@/lib/tool-executor";
+import { approveMemoryWriteRequest, executeMcpServerTool } from "@/lib/tool-executor";
 import type { MemoryWriteRequest, ToolResult } from "@/lib/tool-executor";
 import { formatChatUiTime } from "@/lib/chat-time";
 import { parseActionTags } from "@/lib/action-parser";
@@ -546,6 +546,61 @@ function MemoryWriteRequestCard({
                     <button onClick={() => onIgnore(msg)} className="ui-btn ui-btn-outline flex-1">忽略</button>
                 </div>
             ) : null}
+        </div>
+    );
+}
+
+function TakeoutOrderRequestCard({
+    msg,
+    onConfirm,
+    onCancel,
+}: {
+    msg: ChatMessage;
+    onConfirm: (msg: ChatMessage) => Promise<void>;
+    onCancel: (msg: ChatMessage) => Promise<void>;
+}) {
+    const data = msg.mediaData;
+    const status = data?.takeoutRequestStatus || "pending";
+    const statusText = status === "pending" ? "等待确认"
+        : status === "processing" ? "正在下单"
+            : status === "completed" ? "下单完成"
+                : status === "canceled" ? "已取消"
+                    : "下单失败";
+    const amount = Number(data?.takeoutMaxAmount || 0);
+    return (
+        <div className="w-[292px] rounded-2xl border border-[var(--c-border)] bg-[var(--c-card)]/95 backdrop-blur overflow-hidden ui-bubble-shadow">
+            <div className="px-4 py-3 bg-gradient-to-r from-orange-500/15 to-amber-400/10 border-b border-[var(--c-border)] flex items-center justify-between gap-3">
+                <div className="flex flex-col">
+                    <span className="menu-label">真实外卖订单</span>
+                    <span className="menu-desc !mt-0">由 Starforest 外卖助手执行</span>
+                </div>
+                <span className="menu-desc !mt-0 shrink-0">{statusText}</span>
+            </div>
+            <div className="px-4 py-3 flex flex-col gap-2.5">
+                <div>
+                    <div className="text-[14px] font-semibold text-[var(--c-text)]">{data?.takeoutSummary || "外卖订单"} × {data?.takeoutQuantity || 1}</div>
+                    <div className="menu-desc !mt-0 mt-1">{data?.takeoutShop || "自动选择合适店铺"}</div>
+                    {data?.takeoutSpecs?.length ? <div className="menu-desc !mt-0">规格：{data.takeoutSpecs.join("、")}</div> : null}
+                </div>
+                <div className="rounded-xl bg-[var(--c-input)]/70 px-3 py-2 grid grid-cols-[64px_1fr] gap-x-2 gap-y-1">
+                    <span className="menu-desc !mt-0">送达</span><span className="menu-desc !mt-0 text-[var(--c-text)]">{data?.takeoutAddressLabel || "家"}</span>
+                    <span className="menu-desc !mt-0">手机号</span><span className="menu-desc !mt-0 text-[var(--c-text)]">{data?.takeoutMaskedPhone || "本机保存"}</span>
+                    <span className="menu-desc !mt-0">金额上限</span><span className="menu-desc !mt-0 text-[var(--c-text)]">¥{amount.toFixed(2)}</span>
+                </div>
+                {data?.takeoutResultText ? (
+                    <div className={`rounded-xl px-3 py-2 menu-desc !mt-0 whitespace-pre-wrap ${status === "failed" ? "bg-red-500/10 text-red-500" : "bg-emerald-500/10 text-emerald-600"}`}>
+                        {data.takeoutResultText}
+                    </div>
+                ) : null}
+                {status === "pending" ? (
+                    <div className="flex gap-2">
+                        <button onClick={() => void onConfirm(msg)} className="ui-btn ui-btn-primary flex-1">确认下单</button>
+                        <button onClick={() => void onCancel(msg)} className="ui-btn ui-btn-outline flex-1">取消</button>
+                    </div>
+                ) : status === "processing" ? (
+                    <div className="flex items-center justify-center gap-2 py-1 menu-desc !mt-0"><Loader2 size={14} className="animate-spin" />电脑正在替你完成下单</div>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -2941,6 +2996,30 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                 memoryRequestStatus: "pending",
             });
         }
+        const takeout = results.find(result => result.pendingTakeoutApproval)?.pendingTakeoutApproval;
+        if (takeout) {
+            throwIfGenerationStopped(guard);
+            const msg = pushChatMessage({
+                sessionId: session.id,
+                role: "system",
+                content: `[真实外卖订单等待确认：${takeout.summary}，送到${takeout.addressLabel}，金额不超过${takeout.maxAmount}元]`,
+                mediaType: "takeout_order_request",
+                mediaData: {
+                    takeoutServerId: takeout.serverId,
+                    takeoutJobId: takeout.serverJobId,
+                    takeoutSummary: takeout.summary,
+                    takeoutShop: takeout.shop,
+                    takeoutAddressLabel: takeout.addressLabel,
+                    takeoutMaskedPhone: takeout.maskedPhone,
+                    takeoutQuantity: takeout.quantity,
+                    takeoutSpecs: takeout.specs,
+                    takeoutMaxAmount: takeout.maxAmount,
+                    takeoutRequestStatus: "pending",
+                },
+                toolExecutionId,
+            });
+            setMessages(prev => [...prev, msg]);
+        }
         for (const result of results) {
             for (const att of result.mediaAttachments || []) {
                 throwIfGenerationStopped(guard);
@@ -2999,6 +3078,67 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
             },
         }));
         persistToolNotice("已忽略本次记忆写入");
+    };
+
+    const updateTakeoutCard = (msg: ChatMessage, updates: NonNullable<ChatMessage["mediaData"]>) => {
+        const mediaData = { ...msg.mediaData, ...updates };
+        updateMessageMediaData(msg.id, mediaData);
+        setMessages(prev => prev.map(item => item.id === msg.id ? { ...item, mediaData } : item));
+    };
+
+    const parseMcpData = (result: ToolResult): Record<string, unknown> => {
+        if (!result.success) throw new Error(result.error || "外卖助手调用失败");
+        try { return JSON.parse(result.data || "{}") as Record<string, unknown>; }
+        catch { throw new Error(result.data || "外卖助手返回了无法识别的结果"); }
+    };
+
+    const handleCancelTakeoutOrder = async (msg: ChatMessage) => {
+        const serverId = msg.mediaData?.takeoutServerId;
+        const jobId = msg.mediaData?.takeoutJobId;
+        if (!serverId || !jobId) return;
+        updateTakeoutCard(msg, { takeoutRequestStatus: "canceled", takeoutResultText: "你取消了这次下单。" });
+        await executeMcpServerTool(serverId, "__cancel_takeout_order", { jobId }).catch(() => null);
+    };
+
+    const handleConfirmTakeoutOrder = async (msg: ChatMessage) => {
+        const serverId = msg.mediaData?.takeoutServerId;
+        const jobId = msg.mediaData?.takeoutJobId;
+        if (!serverId || !jobId || msg.mediaData?.takeoutRequestStatus !== "pending") return;
+        updateTakeoutCard(msg, { takeoutRequestStatus: "processing", takeoutResultText: "" });
+        try {
+            const confirmed = parseMcpData(await executeMcpServerTool(serverId, "__confirm_takeout_order", { jobId }));
+            if (confirmed.ok !== true) throw new Error(String(confirmed.error || "确认下单失败"));
+            let finalPayload: Record<string, unknown> | null = null;
+            for (let attempt = 0; attempt < 240; attempt += 1) {
+                await new Promise(resolve => window.setTimeout(resolve, 3000));
+                const status = parseMcpData(await executeMcpServerTool(serverId, "__takeout_order_status", { jobId }));
+                if (status.status === "completed" || status.status === "failed" || status.status === "canceled") {
+                    finalPayload = status;
+                    break;
+                }
+            }
+            if (!finalPayload) throw new Error("下单仍在电脑上执行，请稍后回来看结果");
+            const completed = finalPayload.status === "completed";
+            const resultValue = finalPayload.result;
+            const resultText = typeof resultValue === "string" ? resultValue : JSON.stringify(resultValue ?? {});
+            const errorText = String(finalPayload.error || "下单失败");
+            updateTakeoutCard(msg, {
+                takeoutRequestStatus: completed ? "completed" : finalPayload.status === "canceled" ? "canceled" : "failed",
+                takeoutResultText: completed ? "订单已完成，详细结果已交给对方。" : errorText,
+            });
+            pushChatMessage({
+                sessionId: session.id,
+                role: "user",
+                content: completed
+                    ? `[我已在订单确认卡中确认下单。真实外卖助手返回：${resultText}。请自然地用你的口气告诉我结果，不要像系统日志。]`
+                    : `[真实外卖助手下单失败：${errorText}。请自然地告诉我发生了什么和下一步。]`,
+                mediaType: "tool_result",
+            });
+            await triggerReply();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            updateTakeoutCard(msg, { takeoutRequestStatus: "failed", takeoutResultText: message });
+        }
     };
 
     // Helper: transform stored system message to UI display text
@@ -5580,6 +5720,12 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                                                 msg={msg}
                                                 onApprove={handleApproveMemoryWrite}
                                                 onIgnore={handleIgnoreMemoryWrite}
+                                            />
+                                        ) : msg.mediaType === "takeout_order_request" ? (
+                                            <TakeoutOrderRequestCard
+                                                msg={msg}
+                                                onConfirm={handleConfirmTakeoutOrder}
+                                                onCancel={handleCancelTakeoutOrder}
                                             />
                                         ) : (
                                             <>
