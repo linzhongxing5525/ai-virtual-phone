@@ -28,7 +28,7 @@ export type TakeoutOrderInput = {
 export type TakeoutJobRecord = {
     id: string;
     bridgeId: string;
-    status: "approval_pending" | "queued" | "running" | "completed" | "failed" | "canceled";
+    status: "queued_prepare" | "preparing" | "review_pending" | "queued_submit" | "submitting" | "completed" | "failed" | "canceled";
     input: TakeoutOrderInput;
     createdAt: number;
     updatedAt: number;

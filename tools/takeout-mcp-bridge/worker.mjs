@@ -33,7 +33,7 @@ async function request(url, options = {}) {
     return data;
 }
 
-function runOrder(input) {
+function runOrder(input, dry = false) {
     return new Promise((resolve, reject) => {
         const args = {
             kw: input.kw,
@@ -43,6 +43,7 @@ function runOrder(input) {
             qty: input.qty,
             addr: input.address,
             max: input.max,
+            ...(dry ? { dry: true } : {}),
             cdp: config.cdp || "http://127.0.0.1:9222",
         };
         // The upstream project is CommonJS. It currently has no explicit license,
@@ -99,17 +100,27 @@ while (true) {
             await wait(pollMs);
             continue;
         }
-        console.log(`[${new Date().toLocaleTimeString()}] 开始下单：${job.input.kw} → ${job.input.address}`);
+        const preparing = job.status === "preparing";
+        console.log(`[${new Date().toLocaleTimeString()}] ${preparing ? "试算订单" : "提交已确认订单"}：${job.input.kw} → ${job.input.address}`);
         try {
-            const result = await runOrder(job.input);
-            await request(workerUrl, { method: "PUT", body: JSON.stringify({ jobId: job.id, ok: true, result }) });
-            console.log("下单完成。结果已返回 Starforest。");
+            const result = await runOrder(job.input, preparing);
+            await request(workerUrl, {
+                method: "PUT",
+                body: JSON.stringify({ jobId: job.id, phase: preparing ? "preview" : "final", ok: true, result }),
+            });
+            console.log(preparing ? "试算完成，等待你在 Starforest 确认。" : "订单已提交。结果已返回 Starforest。");
         } catch (error) {
             await request(workerUrl, {
                 method: "PUT",
-                body: JSON.stringify({ jobId: job.id, ok: false, error: error instanceof Error ? error.message : String(error), result: error?.result || null }),
+                body: JSON.stringify({
+                    jobId: job.id,
+                    phase: preparing ? "preview" : "final",
+                    ok: false,
+                    error: error instanceof Error ? error.message : String(error),
+                    result: error?.result || null,
+                }),
             });
-            console.error("下单未完成：", error instanceof Error ? error.message : error);
+            console.error(preparing ? "试算未完成：" : "下单未完成：", error instanceof Error ? error.message : error);
         }
     } catch (error) {
         console.error("连接暂时失败：", error instanceof Error ? error.message : error);

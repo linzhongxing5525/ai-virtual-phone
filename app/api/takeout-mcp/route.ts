@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
             const input = normalizeTakeoutOrderInput(args, pair.profile);
             const jobId = randomUUID();
             const now = Date.now();
-            const job: TakeoutJobRecord = { id: jobId, bridgeId, status: "approval_pending", input, createdAt: now, updatedAt: now };
+            const job: TakeoutJobRecord = { id: jobId, bridgeId, status: "queued_prepare", input, createdAt: now, updatedAt: now };
             await takeoutStore().setJSON(jobKey(bridgeId, jobId), job);
             return rpc(body.id, textResult({
                 kind: "starforest.takeout.approval",
@@ -124,13 +124,13 @@ export async function POST(request: NextRequest) {
 
     if (name === "__confirm_takeout_order") {
         if (!workerOnline) return rpc(body.id, textResult({ ok: false, error: "外卖助手已离线，请在电脑上启动后再确认" }));
-        if (job.status !== "approval_pending") return rpc(body.id, textResult({ ok: false, error: `当前状态不能确认：${job.status}` }));
-        const next: TakeoutJobRecord = { ...job, status: "queued", confirmedAt: Date.now(), updatedAt: Date.now() };
+        if (job.status !== "review_pending") return rpc(body.id, textResult({ ok: false, error: `当前状态不能确认：${job.status}` }));
+        const next: TakeoutJobRecord = { ...job, status: "queued_submit", confirmedAt: Date.now(), updatedAt: Date.now() };
         await store.setJSON(key, next);
         return rpc(body.id, textResult({ ok: true, status: next.status }));
     }
     if (name === "__cancel_takeout_order") {
-        if (job.status === "approval_pending" || job.status === "queued") {
+        if (job.status === "queued_prepare" || job.status === "review_pending" || job.status === "queued_submit") {
             await store.setJSON(key, { ...job, status: "canceled", updatedAt: Date.now(), finishedAt: Date.now() });
         }
         return rpc(body.id, textResult({ ok: true, status: "canceled" }));

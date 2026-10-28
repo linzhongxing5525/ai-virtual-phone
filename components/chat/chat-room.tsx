@@ -561,8 +561,9 @@ function TakeoutOrderRequestCard({
 }) {
     const data = msg.mediaData;
     const status = data?.takeoutRequestStatus || "pending";
-    const statusText = status === "pending" ? "等待确认"
-        : status === "processing" ? "正在下单"
+    const statusText = status === "preparing" ? "正在核对商品"
+        : status === "review_pending" ? "待你确认"
+            : status === "submitting" ? "正在提交订单"
             : status === "completed" ? "下单完成"
                 : status === "canceled" ? "已取消"
                     : "下单失败";
@@ -578,27 +579,29 @@ function TakeoutOrderRequestCard({
             </div>
             <div className="px-4 py-3 flex flex-col gap-2.5">
                 <div>
-                    <div className="text-[14px] font-semibold text-[var(--c-text)]">{data?.takeoutSummary || "外卖订单"} × {data?.takeoutQuantity || 1}</div>
+                    <div className="text-[14px] font-semibold text-[var(--c-text)]">{status === "review_pending" || status === "submitting" || status === "completed" ? (data?.takeoutItems?.join("、") || data?.takeoutSummary || "外卖订单") : `${data?.takeoutSummary || "外卖订单"} × ${data?.takeoutQuantity || 1}`}</div>
                     <div className="menu-desc !mt-0 mt-1">{data?.takeoutShop || "自动选择合适店铺"}</div>
                     {data?.takeoutSpecs?.length ? <div className="menu-desc !mt-0">规格：{data.takeoutSpecs.join("、")}</div> : null}
                 </div>
                 <div className="rounded-xl bg-[var(--c-input)]/70 px-3 py-2 grid grid-cols-[64px_1fr] gap-x-2 gap-y-1">
                     <span className="menu-desc !mt-0">送达</span><span className="menu-desc !mt-0 text-[var(--c-text)]">{data?.takeoutAddressLabel || "家"}</span>
                     <span className="menu-desc !mt-0">手机号</span><span className="menu-desc !mt-0 text-[var(--c-text)]">{data?.takeoutMaskedPhone || "本机保存"}</span>
-                    <span className="menu-desc !mt-0">金额上限</span><span className="menu-desc !mt-0 text-[var(--c-text)]">¥{amount.toFixed(2)}</span>
+                    {data?.takeoutQuotedAmount != null ? <><span className="menu-desc !mt-0">试算金额</span><span className="menu-desc !mt-0 text-[var(--c-text)]">¥{Number(data.takeoutQuotedAmount).toFixed(2)}</span></> : null}
+                    <span className="menu-desc !mt-0">最高限额</span><span className="menu-desc !mt-0 text-[var(--c-text)]">¥{amount.toFixed(2)}</span>
+                    {data?.takeoutEta ? <><span className="menu-desc !mt-0">预计送达</span><span className="menu-desc !mt-0 text-[var(--c-text)]">{data.takeoutEta}</span></> : null}
                 </div>
                 {data?.takeoutResultText ? (
                     <div className={`rounded-xl px-3 py-2 menu-desc !mt-0 whitespace-pre-wrap ${status === "failed" ? "bg-red-500/10 text-red-500" : "bg-emerald-500/10 text-emerald-600"}`}>
                         {data.takeoutResultText}
                     </div>
                 ) : null}
-                {status === "pending" ? (
+                {status === "review_pending" ? (
                     <div className="flex gap-2">
                         <button onClick={() => void onConfirm(msg)} className="ui-btn ui-btn-primary flex-1">确认下单</button>
                         <button onClick={() => void onCancel(msg)} className="ui-btn ui-btn-outline flex-1">取消</button>
                     </div>
-                ) : status === "processing" ? (
-                    <div className="flex items-center justify-center gap-2 py-1 menu-desc !mt-0"><Loader2 size={14} className="animate-spin" />电脑正在替你完成下单</div>
+                ) : status === "preparing" || status === "submitting" ? (
+                    <div className="flex items-center justify-center gap-2 py-1 menu-desc !mt-0"><Loader2 size={14} className="animate-spin" />{status === "preparing" ? "电脑正在核对店铺、商品和金额" : "你已确认，电脑正在提交订单"}</div>
                 ) : null}
             </div>
         </div>
@@ -3014,11 +3017,12 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
                     takeoutQuantity: takeout.quantity,
                     takeoutSpecs: takeout.specs,
                     takeoutMaxAmount: takeout.maxAmount,
-                    takeoutRequestStatus: "pending",
+                    takeoutRequestStatus: "preparing",
                 },
                 toolExecutionId,
             });
             setMessages(prev => [...prev, msg]);
+            void watchTakeoutOrder(msg);
         }
         for (const result of results) {
             for (const att of result.mediaAttachments || []) {
@@ -3096,48 +3100,72 @@ export function ChatRoom({ session, onBack }: ChatRoomProps) {
         const serverId = msg.mediaData?.takeoutServerId;
         const jobId = msg.mediaData?.takeoutJobId;
         if (!serverId || !jobId) return;
+        if (msg.mediaData?.takeoutRequestStatus !== "review_pending") return;
         updateTakeoutCard(msg, { takeoutRequestStatus: "canceled", takeoutResultText: "你取消了这次下单。" });
         await executeMcpServerTool(serverId, "__cancel_takeout_order", { jobId }).catch(() => null);
+    };
+
+    const watchTakeoutOrder = async (msg: ChatMessage) => {
+        const serverId = msg.mediaData?.takeoutServerId;
+        const jobId = msg.mediaData?.takeoutJobId;
+        if (!serverId || !jobId) return;
+        try {
+            for (let attempt = 0; attempt < 240; attempt += 1) {
+                await new Promise(resolve => window.setTimeout(resolve, 3000));
+                const status = parseMcpData(await executeMcpServerTool(serverId, "__takeout_order_status", { jobId }));
+                if (status.status === "review_pending") {
+                    const preview = status.result && typeof status.result === "object" ? status.result as Record<string, unknown> : {};
+                    updateTakeoutCard(msg, {
+                        takeoutRequestStatus: "review_pending",
+                        takeoutShop: String(preview.shop || msg.mediaData?.takeoutShop || "店铺未识别"),
+                        takeoutItems: Array.isArray(preview.items) ? preview.items.map(String) : [],
+                        takeoutQuotedAmount: Number.isFinite(Number(preview.amount)) ? Number(preview.amount) : undefined,
+                        takeoutEta: String(preview.eta || ""),
+                        takeoutResultText: "这是电脑助手的试算结果，尚未提交订单或付款。确认后才会继续。",
+                    });
+                    return;
+                }
+                if (status.status === "completed" || status.status === "failed" || status.status === "canceled") {
+                    const completed = status.status === "completed";
+                    const resultValue = status.result;
+                    const resultText = typeof resultValue === "string" ? resultValue : JSON.stringify(resultValue ?? {});
+                    const errorText = String(status.error || "下单失败");
+                    updateTakeoutCard(msg, {
+                        takeoutRequestStatus: completed ? "completed" : status.status,
+                        takeoutResultText: completed ? "订单已提交。详细结果已交给 Char。" : status.status === "canceled" ? "你取消了这次下单。" : errorText,
+                    });
+                    if (status.status !== "canceled") {
+                        pushChatMessage({
+                            sessionId: session.id,
+                            role: "user",
+                            content: completed
+                                ? `[我已在订单确认卡中确认下单。真实外卖助手返回：${resultText}。请自然地用你的口气告诉我结果，不要像系统日志。]`
+                                : `[真实外卖助手下单失败：${errorText}。请自然地告诉我发生了什么和下一步。]`,
+                            mediaType: "tool_result",
+                        });
+                        await triggerReply();
+                    }
+                    return;
+                }
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            updateTakeoutCard(msg, { takeoutResultText: `正在等待电脑助手返回：${message}` });
+        }
     };
 
     const handleConfirmTakeoutOrder = async (msg: ChatMessage) => {
         const serverId = msg.mediaData?.takeoutServerId;
         const jobId = msg.mediaData?.takeoutJobId;
-        if (!serverId || !jobId || msg.mediaData?.takeoutRequestStatus !== "pending") return;
-        updateTakeoutCard(msg, { takeoutRequestStatus: "processing", takeoutResultText: "" });
+        if (!serverId || !jobId || msg.mediaData?.takeoutRequestStatus !== "review_pending") return;
+        updateTakeoutCard(msg, { takeoutRequestStatus: "submitting", takeoutResultText: "正在把你确认的订单提交给外卖平台。" });
         try {
             const confirmed = parseMcpData(await executeMcpServerTool(serverId, "__confirm_takeout_order", { jobId }));
             if (confirmed.ok !== true) throw new Error(String(confirmed.error || "确认下单失败"));
-            let finalPayload: Record<string, unknown> | null = null;
-            for (let attempt = 0; attempt < 240; attempt += 1) {
-                await new Promise(resolve => window.setTimeout(resolve, 3000));
-                const status = parseMcpData(await executeMcpServerTool(serverId, "__takeout_order_status", { jobId }));
-                if (status.status === "completed" || status.status === "failed" || status.status === "canceled") {
-                    finalPayload = status;
-                    break;
-                }
-            }
-            if (!finalPayload) throw new Error("下单仍在电脑上执行，请稍后回来看结果");
-            const completed = finalPayload.status === "completed";
-            const resultValue = finalPayload.result;
-            const resultText = typeof resultValue === "string" ? resultValue : JSON.stringify(resultValue ?? {});
-            const errorText = String(finalPayload.error || "下单失败");
-            updateTakeoutCard(msg, {
-                takeoutRequestStatus: completed ? "completed" : finalPayload.status === "canceled" ? "canceled" : "failed",
-                takeoutResultText: completed ? "订单已完成，详细结果已交给对方。" : errorText,
-            });
-            pushChatMessage({
-                sessionId: session.id,
-                role: "user",
-                content: completed
-                    ? `[我已在订单确认卡中确认下单。真实外卖助手返回：${resultText}。请自然地用你的口气告诉我结果，不要像系统日志。]`
-                    : `[真实外卖助手下单失败：${errorText}。请自然地告诉我发生了什么和下一步。]`,
-                mediaType: "tool_result",
-            });
-            await triggerReply();
+            await watchTakeoutOrder(msg);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            updateTakeoutCard(msg, { takeoutRequestStatus: "failed", takeoutResultText: message });
+            updateTakeoutCard(msg, { takeoutRequestStatus: "review_pending", takeoutResultText: message });
         }
     };
 

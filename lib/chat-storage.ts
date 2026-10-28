@@ -203,7 +203,10 @@ export type ChatMessage = {
         takeoutQuantity?: number;
         takeoutSpecs?: string[];
         takeoutMaxAmount?: number;
-        takeoutRequestStatus?: "pending" | "processing" | "completed" | "failed" | "canceled";
+        takeoutItems?: string[];
+        takeoutQuotedAmount?: number;
+        takeoutEta?: string;
+        takeoutRequestStatus?: "preparing" | "review_pending" | "submitting" | "completed" | "failed" | "canceled";
         takeoutResultText?: string;
         fileType?: "audio" | "image" | "video" | "file";
         fileName?: string;

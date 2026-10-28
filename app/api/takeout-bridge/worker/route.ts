@@ -27,8 +27,13 @@ export async function GET(request: NextRequest) {
     const listing = await store.list({ prefix: `jobs/${auth.bridgeId}/` });
     for (const blob of listing.blobs) {
         const job = await store.get(blob.key, { type: "json" }) as TakeoutJobRecord | null;
-        if (!job || job.status !== "queued") continue;
-        const running: TakeoutJobRecord = { ...job, status: "running", startedAt: Date.now(), updatedAt: Date.now() };
+        if (!job || (job.status !== "queued_prepare" && job.status !== "queued_submit")) continue;
+        const running: TakeoutJobRecord = {
+            ...job,
+            status: job.status === "queued_prepare" ? "preparing" : "submitting",
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+        };
         await store.setJSON(blob.key, running);
         return NextResponse.json({ job: running }, { headers: { "cache-control": "no-store" } });
     }
@@ -45,13 +50,20 @@ export async function PUT(request: NextRequest) {
     const key = jobKey(auth.bridgeId, jobId);
     const job = await store.get(key, { type: "json" }) as TakeoutJobRecord | null;
     if (!job) return NextResponse.json({ error: "任务不存在" }, { status: 404 });
+    const phase = body?.phase === "preview" ? "preview" : "final";
     const ok = body?.ok === true;
+    if (phase === "preview" && job.status !== "preparing") {
+        return NextResponse.json({ error: "订单已不在准备阶段" }, { status: 409 });
+    }
+    if (phase === "final" && job.status !== "submitting") {
+        return NextResponse.json({ error: "订单已不在提交阶段" }, { status: 409 });
+    }
     const next: TakeoutJobRecord = {
         ...job,
-        status: ok ? "completed" : "failed",
+        status: ok ? (phase === "preview" ? "review_pending" : "completed") : "failed",
         updatedAt: Date.now(),
-        finishedAt: Date.now(),
-        ...(ok ? { result: body?.result ?? null } : { error: String(body?.error || "下单失败").slice(0, 4000), result: body?.result ?? null }),
+        ...(ok && phase === "final" ? { finishedAt: Date.now() } : {}),
+        ...(ok ? { result: body?.result ?? null } : { finishedAt: Date.now(), error: String(body?.error || "下单失败").slice(0, 4000), result: body?.result ?? null }),
     };
     await store.setJSON(key, next);
     return NextResponse.json({ ok: true });
