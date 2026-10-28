@@ -10,6 +10,10 @@ $ConfigPath = Join-Path $RuntimeDirectory "takeout-bridge.local.json"
 $ImportPath = Join-Path $RuntimeDirectory "starforest-takeout-tool.json"
 $PlacesPath = Join-Path $RuntimeDirectory "places.local.json"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$HomeLabel = [string]([char]0x5BB6)
+$OfficeLabel = [string]([char]0x516C) + [char]0x53F8
+$RecognitionKey = [string]([char]0x8BA4)
+$HandFileName = [string]([char]0x624B) + ".cjs"
 
 New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
 if (-not (Test-Path -LiteralPath $UpstreamDirectory)) {
@@ -19,51 +23,42 @@ if (-not (Test-Path -LiteralPath $UpstreamDirectory)) {
 }
 npm --prefix (Join-Path $UpstreamDirectory "script") install
 if (Test-Path -LiteralPath (Join-Path $UpstreamDirectory "script\hand.js")) {
-    Copy-Item -LiteralPath (Join-Path $UpstreamDirectory "script\hand.js") -Destination (Join-Path $UpstreamDirectory "script\手.cjs") -Force
+    Copy-Item -LiteralPath (Join-Path $UpstreamDirectory "script\hand.js") -Destination (Join-Path $UpstreamDirectory "script\$HandFileName") -Force
 }
 Copy-Item -LiteralPath (Join-Path $UpstreamDirectory "script\order.js") -Destination (Join-Path $UpstreamDirectory "script\order.cjs") -Force
 $OrderScriptPath = Join-Path $UpstreamDirectory "script\order.cjs"
 $OrderScript = [System.IO.File]::ReadAllText($OrderScriptPath)
-$OrderScript = $OrderScript.Replace('join(__dirname, "手.js")', 'join(__dirname, "手.cjs")')
+$OrderScript = $OrderScript.Replace(('join(__dirname, "' + [char]0x624B + '.js")'), ('join(__dirname, "' + $HandFileName + '")'))
 [System.IO.File]::WriteAllText($OrderScriptPath, $OrderScript, $Utf8NoBom)
 
 if (-not (Test-Path -LiteralPath $PlacesPath)) {
-    $PlacesTemplate = @'
-{
-  "家": {
-    "latitude": 0,
-    "longitude": 0,
-    "addressKeyword": "请改成地址簿里能识别你家的关键词"
-  },
-  "公司": {
-    "latitude": 0,
-    "longitude": 0,
-    "addressKeyword": "请改成地址簿里能识别公司的关键词"
-  },
-  "phone": "请改成你的手机号",
-  "defaultAddress": "家",
-  "defaultBudget": 50
-}
-'@
+    $PlacesTemplateObject = [ordered]@{
+        $HomeLabel = [ordered]@{ latitude = 0; longitude = 0; addressKeyword = "CHANGE_TO_HOME_ADDRESS_KEYWORD" }
+        $OfficeLabel = [ordered]@{ latitude = 0; longitude = 0; addressKeyword = "CHANGE_TO_OFFICE_ADDRESS_KEYWORD" }
+        phone = "CHANGE_TO_YOUR_PHONE_NUMBER"
+        defaultAddress = $HomeLabel
+        defaultBudget = 50
+    }
+    $PlacesTemplate = $PlacesTemplateObject | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($PlacesPath, $PlacesTemplate, $Utf8NoBom)
-    Write-Host "已生成 $PlacesPath，请填写后重新运行本脚本。"
+    Write-Host "Created $PlacesPath. Fill it in, save it, then run setup.ps1 again."
     Start-Process notepad.exe -ArgumentList $PlacesPath
     exit 2
 }
 
 $PlacesInput = Get-Content -LiteralPath $PlacesPath -Raw | ConvertFrom-Json
-$AddressLabels = @($PlacesInput.PSObject.Properties.Name | Where-Object { $_ -notin @("phone", "defaultAddress", "defaultBudget", "认") })
+$AddressLabels = @($PlacesInput.PSObject.Properties.Name | Where-Object { $_ -notin @("phone", "defaultAddress", "defaultBudget", $RecognitionKey) })
 $Places = @{}
 $Recognition = @{}
 foreach ($Label in $AddressLabels) {
     $Item = $PlacesInput.PSObject.Properties[$Label].Value
     $Latitude = [double]$Item.latitude
     $Longitude = [double]$Item.longitude
-    if ($Latitude -eq 0 -or $Longitude -eq 0) { throw "地址 $Label 的 latitude/longitude 还没有填写" }
+    if ($Latitude -eq 0 -or $Longitude -eq 0) { throw "Address label $Label still has an empty latitude/longitude" }
     $Places[$Label] = @{ latitude = $Latitude; longitude = $Longitude }
     if ($Item.addressKeyword) { $Recognition[$Label] = [string]$Item.addressKeyword }
 }
-$Places["认"] = $Recognition
+$Places[$RecognitionKey] = $Recognition
 $Places["phone"] = [string]$PlacesInput.phone
 $TakeoutPrivateDirectory = Join-Path $env:USERPROFILE ".takeout"
 New-Item -ItemType Directory -Force -Path $TakeoutPrivateDirectory | Out-Null
@@ -95,7 +90,7 @@ $Config = @{
     cdp = "http://127.0.0.1:9222"
     phone = [string]$PlacesInput.phone
     places = $Places
-    defaultAddress = if ($PlacesInput.defaultAddress) { [string]$PlacesInput.defaultAddress } else { "家" }
+    defaultAddress = if ($PlacesInput.defaultAddress) { [string]$PlacesInput.defaultAddress } else { $HomeLabel }
     defaultBudget = if ($PlacesInput.defaultBudget) { [double]$PlacesInput.defaultBudget } else { 50 }
     pollMs = 5000
     orderTimeoutMs = 720000
@@ -109,8 +104,8 @@ $Import = @{
     exportedAt = [DateTime]::UtcNow.ToString("o")
     mcpServers = @(@{
         id = "mcp_takeout_$BridgeId"
-        name = "真实外卖助手"
-        description = "连接用户电脑上的淘宝闪购/饿了么助手。可以查看在线状态；用户明确要求点外卖时生成独立确认卡，只有用户点击卡片确认后才会真实下单。不得在闲聊中擅自花钱。"
+        name = "Starforest Takeout Assistant"
+        description = "Connects to the takeout helper on this computer. It creates an approval card when the user explicitly requests an order. A real order starts only after the user clicks the approval card."
         url = "$($Origin.TrimEnd('/'))/api/takeout-mcp?id=$BridgeId"
         enabled = $true
         accessToken = $Token
@@ -122,10 +117,10 @@ $Import = @{
 
 $Chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 if (-not (Test-Path -LiteralPath $Chrome)) { $Chrome = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" }
-if (-not (Test-Path -LiteralPath $Chrome)) { throw "没有找到 Chrome 或 Edge" }
+if (-not (Test-Path -LiteralPath $Chrome)) { throw "Chrome or Edge was not found" }
 $Profile = Join-Path $RuntimeDirectory "chrome-profile"
 Start-Process -FilePath $Chrome -ArgumentList @("--remote-debugging-port=9222", "--user-data-dir=$Profile", "--window-size=430,920", "https://h5.ele.me")
 
 Write-Host ""
-Write-Host "已生成小手机导入文件：$ImportPath"
-Write-Host "请在专用浏览器中登录淘宝闪购/饿了么，然后运行 start.ps1。"
+Write-Host "Starforest import file: $ImportPath"
+Write-Host "Sign in to Eleme/Taobao Takeout in the dedicated browser, then run start.ps1."
