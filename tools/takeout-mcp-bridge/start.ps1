@@ -2,7 +2,7 @@ param([string]$RuntimeDirectory = "$env:USERPROFILE\Starforest-Takeout")
 $ErrorActionPreference = "Stop"
 $ConfigPath = Join-Path $RuntimeDirectory "takeout-bridge.local.json"
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Run setup.ps1 first" }
-$Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+$Config = [System.IO.File]::ReadAllText($ConfigPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $Chrome = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 if (-not (Test-Path -LiteralPath $Chrome)) { $Chrome = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" }
 $Profile = Join-Path $RuntimeDirectory "chrome-profile"

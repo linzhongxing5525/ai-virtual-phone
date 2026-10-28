@@ -58,7 +58,7 @@ if (-not (Test-Path -LiteralPath $PlacesPath)) {
     exit 2
 }
 
-$PlacesInput = Get-Content -LiteralPath $PlacesPath -Raw | ConvertFrom-Json
+$PlacesInput = [System.IO.File]::ReadAllText($PlacesPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $AddressLabels = @($PlacesInput.PSObject.Properties.Name | Where-Object { $_ -notin @("phone", "defaultAddress", "defaultBudget", $RecognitionKey) })
 $Places = @{}
 $Recognition = @{}
@@ -77,7 +77,7 @@ New-Item -ItemType Directory -Force -Path $TakeoutPrivateDirectory | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $TakeoutPrivateDirectory "places.json"), ($Places | ConvertTo-Json -Depth 8), $Utf8NoBom)
 
 if (Test-Path -LiteralPath $ConfigPath) {
-    $Existing = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    $Existing = [System.IO.File]::ReadAllText($ConfigPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $BridgeId = [string]$Existing.bridgeId
     $Token = [string]$Existing.token
 } else {
@@ -110,6 +110,33 @@ $Config = @{
 [System.IO.File]::WriteAllText($ConfigPath, ($Config | ConvertTo-Json -Depth 8), $Utf8NoBom)
 
 $Now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$StatusToolName = [regex]::Unescape("\u67e5\u770b\u771f\u5b9e\u5916\u5356\u52a9\u624b\u72b6\u6001")
+$PrepareToolName = [regex]::Unescape("\u51c6\u5907\u771f\u5b9e\u5916\u5356\u8ba2\u5355")
+$DiscoveredTools = @(
+    @{
+        name = $StatusToolName
+        description = "Read-only status check for the takeout helper on the user's computer."
+        inputSchema = @{ type = "object"; additionalProperties = $false; properties = @{} }
+    },
+    @{
+        name = $PrepareToolName
+        description = "Use only when the user explicitly asks to order takeout. First creates a no-purchase quote; the real order requires the user's approval card confirmation."
+        inputSchema = @{
+            type = "object"
+            additionalProperties = $false
+            properties = @{
+                kw = @{ type = "string"; description = "Food or drink requested by the user" }
+                dish = @{ type = "string"; description = "Optional exact dish" }
+                shop = @{ type = "string"; description = "Optional shop keyword" }
+                specs = @{ type = "array"; items = @{ type = "string" }; description = "Optional specifications" }
+                qty = @{ type = "number"; description = "Quantity, defaults to 1" }
+                address = @{ type = "string"; description = "Local address label, never a full street address" }
+                max = @{ type = "number"; description = "Maximum total amount in CNY" }
+            }
+            required = @("kw", "max")
+        }
+    }
+)
 $Import = @{
     format = "ai-phone-toolbox"
     version = 1
@@ -121,6 +148,7 @@ $Import = @{
         url = "$($Origin.TrimEnd('/'))/api/takeout-mcp?id=$BridgeId"
         enabled = $true
         accessToken = $Token
+        discoveredTools = $DiscoveredTools
         createdAt = $Now
         updatedAt = $Now
     })
