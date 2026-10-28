@@ -25,7 +25,7 @@ const PREPARE_SCHEMA = {
         specs: { type: "array", items: { type: "string" }, description: "可选规格，例如大杯、少冰、三分糖" },
         qty: { type: "number", description: "数量，默认 1" },
         address: { type: "string", description: "本机地址簿里的标签，例如家、公司；不要填写完整门牌地址" },
-        max: { type: "number", description: "用户允许的最高实付金额，人民币元" },
+        max: { type: "number", description: "用户本轮允许的最高实付金额，人民币元；服务端还会强制执行本机配置的总预算上限" },
     },
     required: ["kw", "max"],
 };

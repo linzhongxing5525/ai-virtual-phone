@@ -116,8 +116,12 @@ export function normalizeTakeoutOrderInput(value: unknown, profile?: TakeoutPair
     if (profile?.addressLabels?.length && !profile.addressLabels.includes(address)) {
         throw new Error(`地址标签不存在，可用地址：${profile.addressLabels.join("、")}`);
     }
-    const maxValue = Number(record.max ?? record.budget ?? profile?.defaultBudget ?? 50);
-    if (!Number.isFinite(maxValue) || maxValue <= 0) throw new Error("金额上限必须大于 0");
+    const requestedMax = Number(record.max ?? record.budget ?? profile?.defaultBudget ?? 50);
+    if (!Number.isFinite(requestedMax) || requestedMax <= 0) throw new Error("金额上限必须大于 0");
+    const localMax = Number(profile?.defaultBudget);
+    const maxValue = Number.isFinite(localMax) && localMax > 0
+        ? Math.min(requestedMax, localMax)
+        : requestedMax;
     const qtyValue = Number(record.qty ?? 1);
     const rawSpecs = record.specs ?? record.规格;
     const specs = Array.isArray(rawSpecs)
