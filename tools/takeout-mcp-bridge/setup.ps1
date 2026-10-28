@@ -17,11 +17,23 @@ $HandFileName = [string]([char]0x624B) + ".cjs"
 
 New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
 if (-not (Test-Path -LiteralPath $UpstreamDirectory)) {
-    git clone --depth 1 $RepoUrl $UpstreamDirectory
+    $CloneDirectory = "$UpstreamDirectory.partial"
+    if (Test-Path -LiteralPath $CloneDirectory) { Remove-Item -LiteralPath $CloneDirectory -Recurse -Force }
+    git clone --depth 1 $RepoUrl $CloneDirectory
+    if ($LASTEXITCODE -ne 0) {
+        if (Test-Path -LiteralPath $CloneDirectory) { Remove-Item -LiteralPath $CloneDirectory -Recurse -Force }
+        throw "Could not download ai-order-takeout from GitHub. Check the network and run setup.ps1 again."
+    }
+    Move-Item -LiteralPath $CloneDirectory -Destination $UpstreamDirectory
 } else {
+    if (-not (Test-Path -LiteralPath (Join-Path $UpstreamDirectory ".git"))) {
+        throw "$UpstreamDirectory is incomplete. Delete only that folder, then run setup.ps1 again."
+    }
     git -C $UpstreamDirectory pull --ff-only
+    if ($LASTEXITCODE -ne 0) { throw "Could not update ai-order-takeout from GitHub. Check the network and run setup.ps1 again." }
 }
 npm --prefix (Join-Path $UpstreamDirectory "script") install
+if ($LASTEXITCODE -ne 0) { throw "npm install failed. Check Node.js and the network, then run setup.ps1 again." }
 if (Test-Path -LiteralPath (Join-Path $UpstreamDirectory "script\hand.js")) {
     Copy-Item -LiteralPath (Join-Path $UpstreamDirectory "script\hand.js") -Destination (Join-Path $UpstreamDirectory "script\$HandFileName") -Force
 }
