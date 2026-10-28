@@ -30,7 +30,7 @@ if (-not (Test-Path -LiteralPath $UpstreamDirectory)) {
         throw "$UpstreamDirectory is incomplete. Delete only that folder, then run setup.ps1 again."
     }
     git -C $UpstreamDirectory pull --ff-only
-    if ($LASTEXITCODE -ne 0) { throw "Could not update ai-order-takeout from GitHub. Check the network and run setup.ps1 again." }
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Could not check for ai-order-takeout updates. Continuing with the complete local copy." }
 }
 npm --prefix (Join-Path $UpstreamDirectory "script") install
 if ($LASTEXITCODE -ne 0) { throw "npm install failed. Check Node.js and the network, then run setup.ps1 again." }
