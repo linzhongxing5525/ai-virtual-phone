@@ -12,6 +12,10 @@ const token = String(config.token || "");
 const upstreamDir = path.resolve(config.upstreamDir || "");
 const pollMs = Math.max(3000, Number(config.pollMs) || 5000);
 const orderTimeoutMs = Math.max(120000, Number(config.orderTimeoutMs) || 12 * 60 * 1000);
+const configuredBudgetCap = Number(config.defaultBudget);
+const budgetCap = Number.isFinite(configuredBudgetCap) && configuredBudgetCap > 0
+    ? configuredBudgetCap
+    : 50;
 
 if (!/^[a-f0-9]{32}$/.test(bridgeId) || !/^[a-f0-9]{64}$/.test(token)) {
     throw new Error("takeout-bridge.local.json 的 bridgeId/token 无效，请重新运行 setup.ps1");
@@ -42,7 +46,7 @@ function runOrder(input, dry = false) {
             ...(Array.isArray(input.specs) && input.specs.length ? { 规格: input.specs } : {}),
             qty: input.qty,
             addr: input.address,
-            max: input.max,
+            max: Math.min(Number(input.max) || budgetCap, budgetCap),
             ...(dry ? { dry: true } : {}),
             cdp: config.cdp || "http://127.0.0.1:9222",
         };
