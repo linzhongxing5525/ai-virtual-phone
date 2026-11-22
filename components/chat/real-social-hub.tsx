@@ -98,7 +98,7 @@ export function RealSocialHub({ onCloseApp }: { onCloseApp: () => void }) {
 
   if (selectedFriend) {
     return (
-      <RealChatRoom
+      <SharedWorldChatRoom
         accountId={accountId}
         accountProfile={accountProfile ?? { id: accountId, username: "me", displayName: "我" }}
         friend={selectedFriend}
@@ -245,12 +245,31 @@ function FriendsPanel({ friends, requests, onSelect, onAction, onChanged, onErro
   </div>;
 }
 
-function RealChatRoom({ accountId, accountProfile, friend, onBack }: { accountId: string; accountProfile: SocialProfile; friend: SocialFriend; onBack: () => void }) {
+export function SharedWorldChatRoom({
+  accountId,
+  accountProfile,
+  friend,
+  onBack,
+  groupName,
+  allowedCharacterIds,
+}: {
+  accountId: string;
+  accountProfile: SocialProfile;
+  friend: SocialFriend;
+  onBack: () => void;
+  groupName?: string;
+  allowedCharacterIds?: string[];
+}) {
   const [messages, setMessages] = useState<SocialMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
-  const [characters] = useState(() => loadSharedWorldCharacters());
+  const [allCharacters] = useState(() => loadSharedWorldCharacters());
+  const characters = useMemo(() => {
+    if (!allowedCharacterIds?.length) return allCharacters;
+    const allowed = new Set(allowedCharacterIds);
+    return allCharacters.filter(character => allowed.has(character.id));
+  }, [allCharacters, allowedCharacterIds]);
   const storagePrefix = `ai_phone_shared_world_${friend.friendshipId}`;
   const [selectedCharacterId, setSelectedCharacterId] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -283,7 +302,9 @@ function RealChatRoom({ accountId, accountProfile, friend, onBack }: { accountId
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
 
   useEffect(() => {
-    if (!selectedCharacterId && characters[0]) setSelectedCharacterId(characters[0].id);
+    if ((!selectedCharacterId || !characters.some(character => character.id === selectedCharacterId)) && characters[0]) {
+      setSelectedCharacterId(characters[0].id);
+    }
   }, [characters, selectedCharacterId]);
 
   useEffect(() => {
@@ -345,7 +366,7 @@ function RealChatRoom({ accountId, accountProfile, friend, onBack }: { accountId
   };
 
   return <div className="absolute inset-0 flex flex-col bg-[var(--c-bg)] text-[var(--c-text)]">
-    <header className="flex shrink-0 items-center gap-3 border-b border-black/5 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))]"><button className="p-2" onClick={onBack}><ArrowLeft size={21} /></button><Avatar profile={friend.profile} size={36} /><div className="min-w-0 flex-1"><div className="truncate text-[14px] font-semibold">和 {friend.profile.displayName} 的共享世界</div><div className="text-[10px] opacity-45">两位真人 · 双方 AI 都能加入</div></div></header>
+    <header className="flex shrink-0 items-center gap-3 border-b border-black/5 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))]"><button className="p-2" onClick={onBack}><ArrowLeft size={21} /></button><Avatar profile={friend.profile} size={36} /><div className="min-w-0 flex-1"><div className="truncate text-[14px] font-semibold">{groupName || friend.profile.displayName}</div><div className="text-[10px] opacity-45">你和 {friend.profile.displayName}{characters.length > 0 ? ` · ${characters.length} 位本地 AI 可加入` : " · 真人对话"}</div></div></header>
     {error && <div className="mx-4 mt-2 rounded-xl bg-red-500/10 px-3 py-2 text-[11px] text-red-600">{error}</div>}
     <div className="shrink-0 border-b border-black/5 bg-[var(--c-card)]/55 px-3 py-2">
       {characters.length > 0 ? <><div className="flex items-center gap-2"><Bot size={16} className="shrink-0 opacity-55" /><select className="min-w-0 flex-1 rounded-xl bg-[var(--c-card)] px-2 py-2 text-[11px] outline-none" value={selectedCharacterId} onChange={event => setSelectedCharacterId(event.target.value)} aria-label="选择加入共享世界的AI角色">{characters.map(character => <option key={character.id} value={character.id}>{character.name}</option>)}</select><button className="flex shrink-0 items-center gap-1 rounded-xl bg-[var(--c-accent)] px-3 py-2 text-[11px] text-white disabled:opacity-40" disabled={!selectedCharacter || aiGenerating} onClick={() => void inviteAi()}>{aiGenerating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}请他接话</button></div><div className="mt-2 flex flex-wrap gap-2 text-[10px]"><button className={`rounded-full px-3 py-1.5 ${autoJoin ? "bg-[var(--c-accent)] text-white" : "bg-black/5 opacity-65"}`} onClick={toggleAutoJoin}>自动参与 {autoJoin ? "开" : "关"}</button><button className={`rounded-full px-3 py-1.5 ${includeMemory ? "bg-amber-500 text-white" : "bg-black/5 opacity-65"}`} onClick={toggleMemory}>结合本地记忆 {includeMemory ? "开" : "关"}</button></div></> : <div className="text-[11px] opacity-55">本机还没有 AI 角色，创建角色后就能邀请他加入共享世界。</div>}

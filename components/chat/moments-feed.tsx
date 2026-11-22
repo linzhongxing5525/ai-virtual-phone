@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { getAllPosts, deleteMomentPost, getUnreadMomentsNotifications, saveMomentsLastSeen, addMomentComment } from "@/lib/moments-storage";
 import { loadChatContacts } from "@/lib/chat-storage";
 import { resolveUserIdentity } from "@/lib/settings-storage";
@@ -13,6 +13,8 @@ import { PageShell } from "@/components/ui/page-shell";
 import { AlertCircle } from "lucide-react";
 import { kvGet, kvSet, registerKvMigration } from "@/lib/kv-db";
 import { onUserComment } from "@/lib/moments-engine";
+import { SocialRealtimeChannel, socialApi, type SocialPost } from "@/lib/social-client";
+import { SocialMomentActivity, SocialMomentPostCard } from "./social-moment-post-card";
 
 const COVER_ASSET_KEY = "moments_cover_asset_id";
 registerKvMigration(COVER_ASSET_KEY);
@@ -42,6 +44,7 @@ type MomentsFeedProps = {
 
 export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
     const [posts, setPosts] = useState<MomentPost[]>([]);
+    const [socialPosts, setSocialPosts] = useState<SocialPost[]>([]);
     const [showCompose, setShowCompose] = useState(false);
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
     const [coverUrl, setCoverUrl] = useState<string | null>(null);
@@ -99,6 +102,11 @@ export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
         const contactIds = new Set(loadChatContacts().map(c => c.characterId));
         setPosts(getAllPosts().filter(p => p.authorType === "user" || contactIds.has(p.authorId)));
         setUnreadNotifs(getUnreadMomentsNotifications());
+    }, []);
+
+    const refreshSocialPosts = useCallback(async () => {
+        try { setSocialPosts(await socialApi.posts()); }
+        catch { setSocialPosts([]); }
     }, []);
 
     const captureScrollAnchor = useCallback((): MomentScrollAnchorSnapshot | null => {
@@ -185,6 +193,21 @@ export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
     }, [getScrollElement, restoreScrollAnchor, stopLoadMoreAnchorTracking]);
 
     const visiblePosts = posts.slice(0, visiblePostCount);
+    const unifiedPosts = useMemo(() => {
+        const findTwin = (local: MomentPost) => socialPosts.find(remote => (
+            remote.mine
+            && local.authorType === "user"
+            && local.content === remote.body
+            && Math.abs(new Date(local.createdAt).getTime() - new Date(remote.createdAt).getTime()) < 5 * 60_000
+        ));
+        const localPosts = visiblePosts.map(post => ({ kind: "local" as const, createdAt: post.createdAt, post, socialTwin: findTwin(post) }));
+        const matchedIds = new Set(localPosts.map(item => item.socialTwin?.id).filter(Boolean));
+        const remotePosts = socialPosts.filter(remote => !matchedIds.has(remote.id));
+        return [
+            ...localPosts,
+            ...remotePosts.map(post => ({ kind: "social" as const, createdAt: post.createdAt, post })),
+        ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }, [socialPosts, visiblePosts]);
     const hasMorePosts = visiblePostCount < posts.length;
 
     const handleLoadMorePosts = useCallback(() => {
@@ -286,6 +309,7 @@ export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
     // Load posts + start background service + load cover
     useEffect(() => {
         refreshPosts();
+        void refreshSocialPosts();
 
         const handler = () => refreshPosts();
         window.addEventListener("moments-updated", handler);
@@ -298,10 +322,16 @@ export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
             });
         }
 
+        let socialChannel: SocialRealtimeChannel | null = null;
+        void SocialRealtimeChannel.connect("feed", { refresh: () => void refreshSocialPosts() }).then(channel => { socialChannel = channel; });
+        const socialTimer = window.setInterval(() => void refreshSocialPosts(), 20_000);
+
         return () => {
             window.removeEventListener("moments-updated", handler);
+            window.clearInterval(socialTimer);
+            socialChannel?.close();
         };
-    }, [refreshPosts]);
+    }, [refreshPosts, refreshSocialPosts]);
 
     // Hide tab bar only when the full compose page is open.
     useEffect(() => {
@@ -324,6 +354,7 @@ export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
     const handlePublished = () => {
         setShowCompose(false);
         refreshPosts();
+        void refreshSocialPosts();
         window.dispatchEvent(new CustomEvent("moments-updated"));
     };
 
@@ -525,20 +556,24 @@ export function MomentsFeed({ onCloseApp }: MomentsFeedProps) {
                 )}
 
                 {/* Posts list */}
-                {posts.length === 0 ? (
+                {posts.length === 0 && socialPosts.length === 0 ? (
                     <div className="feed-empty-state py-10 text-center text-[var(--c-icon)] ts-14">
                         还没有动态，发一条吧
                     </div>
                 ) : (
-                    visiblePosts.map(post => (
-                        <MomentPostCard
-                            key={post.id}
-                            post={post}
-                            onUpdate={refreshPosts}
-                            onRequestDelete={setConfirmDeleteId}
-                            onOpenCommentComposer={openCommentComposer}
-                            onOpenReplyComposer={openReplyComposer}
-                        />
+                    unifiedPosts.map(item => item.kind === "local" ? (
+                        <div key={`local-${item.post.id}`}>
+                            <MomentPostCard
+                                post={item.post}
+                                onUpdate={refreshPosts}
+                                onRequestDelete={setConfirmDeleteId}
+                                onOpenCommentComposer={openCommentComposer}
+                                onOpenReplyComposer={openReplyComposer}
+                            />
+                            {item.socialTwin && <SocialMomentActivity post={item.socialTwin} onChanged={refreshSocialPosts} compact />}
+                        </div>
+                    ) : (
+                        <SocialMomentPostCard key={`social-${item.post.id}`} post={item.post} onChanged={refreshSocialPosts} />
                     ))
                 )}
                 {hasMorePosts && (

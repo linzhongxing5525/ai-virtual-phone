@@ -9,7 +9,7 @@ import type { MediaAttachment } from "./tool-executor";
 import { loadMediaBlob, isMediaStoreRef } from "./media-cache-storage";
 import { parseAIResponse, type ParsedMessagePart } from "./rich-message-parser";
 import { splitBilingualText } from "./bilingual-text";
-import { resolveVoiceConfig, synthesizeSpeech } from "./tts-service";
+import { resolveVoiceConfig, synthesizeSpeech, inferSpeechEmotion, prepareSpeechText } from "./tts-service";
 import { formatShoppingPaymentRequestHistory } from "./shopping-payment-request";
 
 // ── iLink 实际消息格式 ────────────────────────────────────────
@@ -775,7 +775,11 @@ async function partToWeixinOutgoing(part: ParsedMessagePart, charName: string, c
         const voiceConfig = resolveVoiceConfig(characterId, "chat");
         if (voiceConfig?.enableTTS) {
             try {
-                const audioBlob = await synthesizeSpeech(speechText || transcript, voiceConfig);
+                const sourceText = speechText || transcript;
+                const preparedSpeech = prepareSpeechText(sourceText);
+                const audioBlob = await synthesizeSpeech(preparedSpeech, voiceConfig, {
+                    emotion: inferSpeechEmotion(sourceText, preparedSpeech),
+                });
                 if (audioBlob) {
                     const [audioDataUrl, audioDuration] = await Promise.all([
                         blobToAudioDataUrl(audioBlob),

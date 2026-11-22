@@ -20,6 +20,7 @@ import { pinyin } from "pinyin-pro";
 import { kvSet } from "@/lib/kv-db";
 import { scrollElementWithinContainer } from "@/lib/dom-scroll";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
+import { socialApi, type SocialFriend, type SocialFriendRequest, type SocialProfile } from "@/lib/social-client";
 import {
     DEFAULT_MASCOT_AVATAR,
     getMascotSettingsSnapshot,
@@ -32,6 +33,10 @@ type ChatContactsListProps = {
     onCloseApp: () => void;
     onSelectSession: (session: ChatSession | null) => void;
     onSelectMascot: () => void;
+    socialFriends: SocialFriend[];
+    socialRequests: SocialFriendRequest[];
+    onSocialChanged: () => Promise<void>;
+    onSelectSocialFriend: (friend: SocialFriend) => void;
     /** 名片点击「加好友」：切到本 tab 后待打开添加页的角色 id */
     pendingAddContactId?: string | null;
     onPendingAddContactConsumed?: () => void;
@@ -39,7 +44,17 @@ type ChatContactsListProps = {
     onPendingAddContactBack?: () => void;
 };
 
-export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, pendingAddContactId, onPendingAddContactConsumed, onPendingAddContactBack }: ChatContactsListProps) {
+type UnifiedContact = {
+    key: string;
+    kind: "ai" | "human";
+    name: string;
+    subtitle: string;
+    avatar?: string | null;
+    localCharacter?: Character;
+    socialFriend?: SocialFriend;
+};
+
+export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, socialFriends, socialRequests, onSocialChanged, onSelectSocialFriend, pendingAddContactId, onPendingAddContactConsumed, onPendingAddContactBack }: ChatContactsListProps) {
     const [contacts, setContacts] = useState<(ChatContact & { char?: Character })[]>([]);
     const [contactFilter, setContactFilter] = useState("");
     const [latestPost, setLatestPost] = useState<Record<string, string>>({});
@@ -52,6 +67,8 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
     const [addResult, setAddResult] = useState<Character | null | undefined>(undefined);
     const [isSendingAdd, setIsSendingAdd] = useState(false);
     const [greetingText, setGreetingText] = useState("");
+    const [socialSearching, setSocialSearching] = useState(false);
+    const [socialResults, setSocialResults] = useState<SocialProfile[]>([]);
     // 添加页是否由名片打开：返回时应回到原聊天室而非联系人列表
     const addFromCardRef = useRef(false);
     const mascotSettings = useSyncExternalStore(subscribeMascotSettings, getMascotSettingsSnapshot, getMascotSettingsSnapshot);
@@ -128,14 +145,29 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
     }, [refresh]);
 
     /** Group contacts by pinyin initial */
-    const { grouped, indexLetters } = useMemo(() => {
+    const { grouped, indexLetters, unifiedContacts } = useMemo(() => {
         const keyword = deferredContactFilter.trim().toLowerCase();
-        const filtered = keyword
-            ? contacts.filter(c => (c.char?.name || "").toLowerCase().includes(keyword))
-            : contacts;
-        const map: Record<string, typeof contacts> = {};
+        const all: UnifiedContact[] = [
+            ...contacts.map(contact => ({
+                key: `ai-${contact.id}`,
+                kind: "ai" as const,
+                name: contact.char?.name || "UNNAMED",
+                subtitle: latestPost[contact.characterId] || "暂无动态",
+                avatar: contact.char?.avatar,
+                localCharacter: contact.char,
+            })),
+            ...socialFriends.map(friend => ({
+                key: `human-${friend.friendshipId}`,
+                kind: "human" as const,
+                name: friend.profile.displayName,
+                subtitle: `@${friend.profile.username} · 真人好友`,
+                socialFriend: friend,
+            })),
+        ];
+        const filtered = keyword ? all.filter(contact => `${contact.name} ${contact.subtitle}`.toLowerCase().includes(keyword)) : all;
+        const map: Record<string, UnifiedContact[]> = {};
         for (const c of filtered) {
-            const letter = getInitial(c.char?.name || "");
+            const letter = getInitial(c.name);
             (map[letter] ??= []).push(c);
         }
         // Sort keys: A-Z first, then #
@@ -144,9 +176,20 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
             if (b === "#") return -1;
             return a.localeCompare(b);
         });
-        return { grouped: map, indexLetters: sorted };
+        return { grouped: map, indexLetters: sorted, unifiedContacts: all };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [contacts, deferredContactFilter]);
+    }, [contacts, deferredContactFilter, latestPost, socialFriends]);
+
+    const incomingSocialRequests = socialRequests.filter(request => request.incoming);
+    const handleSocialRequest = async (action: "accept" | "reject", request: SocialFriendRequest) => {
+        setIsProcessing(true);
+        try {
+            await socialApi.friendAction(action, { requestId: request.id });
+            await onSocialChanged();
+        } finally {
+            setIsProcessing(false);
+        }
+    };
 
     const handleAccept = async (req: FriendRequest) => {
         setIsProcessing(true);
@@ -225,7 +268,7 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                 <div className="mb-3 mt-3">
                     <div
                         className="minimal-list-item"
-                        onClick={() => pendingRequests.length > 0 && setShowRequestList(true)}
+                        onClick={() => (pendingRequests.length > 0 || incomingSocialRequests.length > 0) && setShowRequestList(true)}
                     >
                         <div className="w-[48px] h-[48px] rounded-full bg-[var(--c-action-blue,#246bfd)] flex items-center justify-center shrink-0">
                             <svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -238,8 +281,8 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                         <div className="flex-1 overflow-hidden h-[48px] flex flex-col justify-center">
                             <div className="ts-16 font-medium text-[var(--c-text-title)]">New Friends</div>
                         </div>
-                        {pendingRequests.length > 0 && (
-                            <div className="minimal-unread-count ml-auto shrink-0">{pendingRequests.length}</div>
+                        {(pendingRequests.length + incomingSocialRequests.length) > 0 && (
+                            <div className="minimal-unread-count ml-auto shrink-0">{pendingRequests.length + incomingSocialRequests.length}</div>
                         )}
                     </div>
                 </div>
@@ -260,7 +303,7 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                 )}
 
                 {/* Contacts list grouped by pinyin initial */}
-                {contacts.length === 0 ? (
+                {unifiedContacts.length === 0 ? (
                     <div className="ui-empty">
                         <span className="menu-desc">暂无联系人，去消息页右上角添加吧</span>
                     </div>
@@ -270,29 +313,35 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                             <div key={letter} ref={el => { sectionRefs.current[letter] = el; }} className="flex flex-col gap-0">
                                 <div className="contact-letter-header text-[var(--c-icon)] py-2 ts-13 pl-1 font-semibold">{letter}</div>
                                 {grouped[letter].map(c => {
-                                    const char = c.char!;
                                     return (
                                         <div
-                                            key={c.id}
+                                            key={c.key}
                                             onClick={() => {
-                                                const sess = createOrGetSession(char.id);
-                                                onSelectSession(sess);
+                                                if (c.kind === "human" && c.socialFriend) {
+                                                    onSelectSocialFriend(c.socialFriend);
+                                                    return;
+                                                }
+                                                if (c.localCharacter) {
+                                                    const sess = createOrGetSession(c.localCharacter.id);
+                                                    onSelectSession(sess);
+                                                }
                                             }}
                                             className="minimal-list-item"
                                         >
-                                            <div className="minimal-avatar-wrapper">
-                                                {char.avatar ? (
-                                                    <img src={char.avatar} className="w-full h-full object-cover rounded-full" alt="" />
+                                            <div className={`minimal-avatar-wrapper ${c.kind === "human" ? "grid place-items-center bg-gradient-to-br from-violet-400 to-sky-400 font-semibold text-white" : ""}`}>
+                                                {c.kind === "human" ? c.name.slice(0, 1) : c.avatar ? (
+                                                    <img src={c.avatar} className="w-full h-full object-cover rounded-full" alt="" />
                                                 ) : (
                                                     <ChatFallbackAvatar className="rounded-full" />
                                                 )}
                                             </div>
                                             <div className="flex-1 overflow-hidden h-[48px] flex flex-col justify-center gap-1">
                                                 <div className="ts-16 font-medium text-[var(--c-text-title)] truncate">
-                                                    {char.name || "UNNAMED"}
+                                                    {c.name}
+                                                    {c.kind === "human" && <span className="ml-2 rounded-full bg-violet-500/10 px-2 py-0.5 ts-10 text-violet-600">真人</span>}
                                                 </div>
                                                 <div className="ts-13 text-[var(--c-text)] opacity-80 truncate font-normal">
-                                                    {latestPost[char.id] || "暂无动态"}
+                                                    {c.subtitle}
                                                 </div>
                                             </div>
                                         </div>
@@ -328,12 +377,25 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                         <div className="ts-17 font-semibold text-center text-[var(--c-text-title)]">
                             新的朋友
                         </div>
-                        {pendingRequests.length === 0 ? (
+                        {pendingRequests.length === 0 && incomingSocialRequests.length === 0 ? (
                             <div className="py-6 text-center text-[var(--c-text)] ts-14">
                                 暂无好友申请
                             </div>
                         ) : (
                             <div className="freq-list">
+                                {incomingSocialRequests.map(request => (
+                                    <div key={`social-${request.id}`} className="freq-list-item">
+                                        <div className="freq-avatar grid place-items-center bg-gradient-to-br from-violet-400 to-sky-400 font-semibold text-white">
+                                            {request.profile.displayName.slice(0, 1)}
+                                        </div>
+                                        <div className="flex-1 overflow-hidden">
+                                            <div className="menu-label font-medium truncate">{request.profile.displayName}<span className="ml-2 ts-10 opacity-45">真人</span></div>
+                                            <div className="ts-12 text-[var(--c-text)] truncate mt-[2px]">{request.message || "请求添加你为好友"}</div>
+                                        </div>
+                                        <button className="ui-btn ui-btn-success px-3 py-1" disabled={isProcessing} onClick={() => void handleSocialRequest("accept", request)}>接受</button>
+                                        <button className="ui-btn ui-btn-ghost px-3 py-1" disabled={isProcessing} onClick={() => void handleSocialRequest("reject", request)}>拒绝</button>
+                                    </div>
+                                ))}
                                 {pendingRequests.map(req => {
                                     const char = getCharForRequest(req);
                                     return (
@@ -439,7 +501,7 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                                         autoFocus
                                         placeholder="微信号/手机号"
                                         value={addQuery}
-                                        onChange={(e) => { setAddQuery(e.target.value); setAddResult(undefined); }}
+                                        onChange={(e) => { setAddQuery(e.target.value); setAddResult(undefined); setSocialResults([]); }}
                                         className="ui-input ui-input-inline"
                                     />
                                     {addQuery && (
@@ -451,16 +513,28 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                                 {addQuery.trim().length > 0 && (
                                     <button
                                         className="menu-item"
-                                        onClick={() => {
+                                        onClick={async () => {
                                             const found = chars.find(c => c.wechatID === addQuery.trim() || c.id === addQuery.trim());
-                                            setAddResult(found || null);
+                                            setAddResult(found || undefined);
+                                            setSocialSearching(true);
+                                            try {
+                                                const users = await socialApi.searchUsers(addQuery.trim());
+                                                const existingIds = new Set(socialFriends.map(friend => friend.profile.id));
+                                                const available = users.filter(user => !existingIds.has(user.id));
+                                                setSocialResults(available);
+                                                if (!found && available.length === 0) setAddResult(null);
+                                            } catch {
+                                                if (!found) setAddResult(null);
+                                            } finally {
+                                                setSocialSearching(false);
+                                            }
                                         }}
                                     >
                                         <div className="menu-icon">
                                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--c-success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                                         </div>
                                         <div className="menu-label-group">
-                                            <span className="menu-label">搜索：<span className="text-[var(--c-success)]">{addQuery}</span></span>
+                                            <span className="menu-label">{socialSearching ? "搜索中…" : "搜索"}：<span className="text-[var(--c-success)]">{addQuery}</span></span>
                                         </div>
                                     </button>
                                 )}
@@ -492,6 +566,30 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
                                     </button>
                                 </div>
                             )}
+                        </div>
+                    )}
+                    {socialResults.length > 0 && !isSendingAdd && (
+                        <div className="page-menu">
+                            <p className="menu-group-desc mx-0">真人账号</p>
+                            <div className="menu-group">
+                                {socialResults.map(profile => (
+                                    <div key={profile.id} className="menu-item">
+                                        <div className="add-friend-avatar grid place-items-center bg-gradient-to-br from-violet-400 to-sky-400 font-semibold text-white">{profile.displayName.slice(0, 1)}</div>
+                                        <div className="menu-label-group min-w-0">
+                                            <span className="menu-label truncate">{profile.displayName}</span>
+                                            <span className="menu-desc truncate">@{profile.username} · 真人</span>
+                                        </div>
+                                        <button
+                                            className="ui-btn ui-btn-success px-3 py-1"
+                                            onClick={async () => {
+                                                await socialApi.friendAction("send", { targetUserId: profile.id, message: greetingText || "想和你成为好友" });
+                                                await onSocialChanged();
+                                                setSocialResults(current => current.filter(item => item.id !== profile.id));
+                                            }}
+                                        >添加</button>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                     {addResult === null && (

@@ -117,39 +117,46 @@ function createCloudSTTSession(callbacks: STTCallbacks, lang: string, config: No
 
             const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
             if (AudioContextCtor) {
-                audioContext = new AudioContextCtor();
-                const source = audioContext.createMediaStreamSource(stream);
-                const analyser = audioContext.createAnalyser();
-                analyser.fftSize = 1024;
-                source.connect(analyser);
-                const samples = new Uint8Array(analyser.fftSize);
-                analyserTimer = setInterval(() => {
-                    if (!analyser || aborted) return;
-                    analyser.getByteTimeDomainData(samples);
-                    let sum = 0;
-                    for (const sample of samples) {
-                        const normalized = (sample - 128) / 128;
-                        sum += normalized * normalized;
-                    }
-                    const rms = Math.sqrt(sum / samples.length);
-                    const now = Date.now();
-                    if (rms > 0.025) {
-                        if (!speechDetected) {
-                            speechDetected = true;
-                            speechStartedAt = now;
-                            callbacks.onInterim("正在聆听…");
+                try {
+                    audioContext = new AudioContextCtor();
+                    if (audioContext.state === "suspended") void audioContext.resume().catch(() => {});
+                    const source = audioContext.createMediaStreamSource(stream);
+                    const analyser = audioContext.createAnalyser();
+                    analyser.fftSize = 1024;
+                    source.connect(analyser);
+                    const samples = new Uint8Array(analyser.fftSize);
+                    analyserTimer = setInterval(() => {
+                        if (aborted) return;
+                        analyser.getByteTimeDomainData(samples);
+                        let sum = 0;
+                        for (const sample of samples) {
+                            const normalized = (sample - 128) / 128;
+                            sum += normalized * normalized;
                         }
-                        lastVoiceAt = now;
-                    } else if (speechDetected && now - speechStartedAt > 650 && now - lastVoiceAt > 1100) {
-                        finishRecording();
-                    }
-                }, 100);
-            } else {
+                        const rms = Math.sqrt(sum / samples.length);
+                        const now = Date.now();
+                        if (rms > 0.012) {
+                            if (!speechDetected) {
+                                speechDetected = true;
+                                speechStartedAt = now;
+                                callbacks.onInterim("正在聆听…");
+                            }
+                            lastVoiceAt = now;
+                        } else if (speechDetected && now - speechStartedAt > 650 && now - lastVoiceAt > 1400) {
+                            finishRecording();
+                        }
+                    }, 100);
+                } catch {
+                    try { audioContext?.close(); } catch { /* ignore */ }
+                    audioContext = null;
+                }
+            }
+            if (!audioContext) {
                 // Without an analyser we still capture a useful fixed-length utterance.
                 speechDetected = true;
                 callbacks.onInterim("正在聆听…");
             }
-            maxTimer = setTimeout(finishRecording, 15_000);
+            maxTimer = setTimeout(finishRecording, 30_000);
         } catch (error) {
             cleanup();
             if (!aborted) {
@@ -179,8 +186,11 @@ export function createSTTSession(
     lang = "zh-CN",
     cloudConfig?: CloudSTTConfig,
 ): STTSession {
+    // Prefer configured cloud transcription across browsers. Native Web Speech
+    // can silently end or fail on mobile browsers despite microphone access.
+    if (hasCloudSTT(cloudConfig)) return createCloudSTTSession(callbacks, lang, cloudConfig);
+
     if (isAndroidEdge()) {
-        if (hasCloudSTT(cloudConfig)) return createCloudSTTSession(callbacks, lang, cloudConfig);
         return {
             start: () => callbacks.onError("Android Edge 的内置语音识别不可用，请在语音设置中配置 Groq 或 OpenAI 云端识别"),
             stop: () => {},

@@ -8,6 +8,7 @@ import { onUserPost } from "@/lib/moments-engine";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { saveChatImageToIndexedDB, getChatImageFromIndexedDB } from "@/lib/chat-asset-storage";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
+import { notifySocialTopic, socialApi } from "@/lib/social-client";
 
 type Props = {
     onClose: () => void;
@@ -148,7 +149,7 @@ export function MomentsCompose({ onClose, onPublished }: Props) {
         });
     };
 
-    const handlePublish = () => {
+    const handlePublish = async () => {
         if (!text.trim()) return;
 
         // Build content with @mentions appended
@@ -179,6 +180,12 @@ export function MomentsCompose({ onClose, onPublished }: Props) {
         if (post) {
             try { onUserPost(post); } catch (e) { console.warn("[Compose] onUserPost error:", e); }
         }
+        try {
+            await socialApi.postAction("create", { body: content, imageUrl: "" });
+            void notifySocialTopic("feed", "refresh");
+        } catch {
+            // Not logged in / offline: the local AI-world post is still kept.
+        }
         onPublished();
     };
 
@@ -204,7 +211,7 @@ export function MomentsCompose({ onClose, onPublished }: Props) {
                         </svg>
                     </button>
                     <span className="compose-modal-title">发朋友圈</span>
-                    <button onClick={handlePublish} disabled={!canPublish} className="compose-header-icon compose-header-send" aria-label="发表">
+                    <button onClick={() => void handlePublish()} disabled={!canPublish} className="compose-header-icon compose-header-send" aria-label="发表">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
                         </svg>

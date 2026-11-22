@@ -89,18 +89,18 @@ export type MinimaxSpeechEmotion = "happy" | "sad" | "angry" | "fearful" | "disg
 
 const SPEECH_EMOTION_ALIASES: Record<string, MinimaxSpeechEmotion> = {
     happy: "happy", joy: "happy", joyful: "happy", excited: "happy", cheerful: "happy",
-    开心: "happy", 高兴: "happy", 喜悦: "happy", 兴奋: "happy", 甜蜜: "happy",
+    开心: "happy", 高兴: "happy", 喜悦: "happy", 兴奋: "happy", 甜蜜: "happy", 轻快: "happy", 轻笑: "happy", 微笑: "happy", 笑: "happy", 笑着: "happy",
     sad: "sad", sorrow: "sad", sorrowful: "sad", depressed: "sad",
-    难过: "sad", 伤心: "sad", 悲伤: "sad", 失落: "sad", 委屈: "sad",
+    难过: "sad", 伤心: "sad", 悲伤: "sad", 失落: "sad", 委屈: "sad", 低落: "sad", 哽咽: "sad", 叹气: "sad", 叹息: "sad", 无奈: "sad",
     angry: "angry", mad: "angry", furious: "angry",
-    生气: "angry", 愤怒: "angry", 恼火: "angry", 暴躁: "angry",
+    生气: "angry", 愤怒: "angry", 恼火: "angry", 暴躁: "angry", 不耐烦: "angry", 气呼呼: "angry",
     fearful: "fearful", fear: "fearful", scared: "fearful", worried: "fearful", anxious: "fearful", nervous: "fearful",
-    害怕: "fearful", 恐惧: "fearful", 担心: "fearful", 焦虑: "fearful", 紧张: "fearful",
-    disgusted: "disgusted", disgust: "disgusted", 厌恶: "disgusted", 嫌弃: "disgusted",
+    害怕: "fearful", 恐惧: "fearful", 担心: "fearful", 焦虑: "fearful", 紧张: "fearful", 慌张: "fearful", 忐忑: "fearful",
+    disgusted: "disgusted", disgust: "disgusted", 厌恶: "disgusted", 嫌弃: "disgusted", 鄙夷: "disgusted",
     surprised: "surprised", surprise: "surprised", shocked: "surprised",
-    惊讶: "surprised", 震惊: "surprised", 意外: "surprised",
+    惊讶: "surprised", 震惊: "surprised", 意外: "surprised", 诧异: "surprised", 吃惊: "surprised",
     calm: "calm", gentle: "calm", tender: "calm", soft: "calm", shy: "calm", romantic: "calm",
-    平静: "calm", 冷静: "calm", 温柔: "calm", 害羞: "calm", 深情: "calm", 宠溺: "calm",
+    平静: "calm", 冷静: "calm", 温柔: "calm", 害羞: "calm", 深情: "calm", 宠溺: "calm", 轻声: "calm", 低声: "calm", 软下来: "calm", 放轻声音: "calm", 撒娇: "calm", 亲昵: "calm", 柔声: "calm",
     fluent: "fluent", natural: "fluent", 自然: "fluent", 流畅: "fluent",
     neutral: "neutral", normal: "neutral", 中性: "neutral", 普通: "neutral",
 };
@@ -120,7 +120,7 @@ function mapSpeechEmotion(value: string | undefined): MinimaxSpeechEmotion | und
  * speech cues as a fallback. Keeping this here gives calls and custom voice
  * features one MiniMax-compatible vocabulary.
  */
-export function inferSpeechEmotion(rawResponse: string, speechText = ""): MinimaxSpeechEmotion {
+export function inferSpeechEmotion(rawResponse: string, speechText = ""): MinimaxSpeechEmotion | undefined {
     const explicitPatterns = [
         /["']emotion["']\s*:\s*["']([^"']+)["']/i,
         /<emotion>\s*([^<]+)\s*<\/emotion>/i,
@@ -131,6 +131,10 @@ export function inferSpeechEmotion(rawResponse: string, speechText = ""): Minima
         const mapped = mapSpeechEmotion(rawResponse.match(pattern)?.[1]);
         if (mapped) return mapped;
     }
+
+    const direction = rawResponse.match(/^\s*[（(\[【]([^）)\]】]{1,40})[）)\]】]/)?.[1];
+    const directionEmotion = mapSpeechEmotion(direction);
+    if (directionEmotion) return directionEmotion;
 
     const text = speechText.trim();
     const cueGroups: Array<[RegExp, MinimaxSpeechEmotion]> = [
@@ -144,7 +148,17 @@ export function inferSpeechEmotion(rawResponse: string, speechText = ""): Minima
     for (const [pattern, emotion] of cueGroups) {
         if (pattern.test(text)) return emotion;
     }
-    return "fluent";
+    // Do not force a single emotion on every call. Leaving the provider's
+    // emotion unset lets it follow the wording and punctuation naturally.
+    return undefined;
+}
+
+/** Remove only leading stage-direction parentheses from text sent to TTS. */
+export function prepareSpeechText(text: string): string {
+    let result = text.trim();
+    const leadingDirection = /^\s*[（(\[【][^）)\]】]{1,40}[）)\]】]\s*/;
+    while (leadingDirection.test(result)) result = result.replace(leadingDirection, "");
+    return result.trim();
 }
 
 async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {

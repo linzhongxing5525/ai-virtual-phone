@@ -24,6 +24,15 @@
 @import "../styles/cocreate.css";
 @import "../styles/qa.css";
 
+/* Netlify may inject this promotional badge outside the app shell on free sites.
+   Keep it from covering the iPhone home indicator and chat composer. */
+#nl-badge-frame,
+iframe[id="nl-badge-frame"] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 @theme {
   /* 间距 (4px 基准) */
   --spacing-0_5: 2px;  --spacing-1: 4px;   --spacing-1_5: 6px;

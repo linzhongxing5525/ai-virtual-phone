@@ -50,15 +50,18 @@ export async function GET(request: Request) {
     const account = await requireSocialAccount(request);
     const url = new URL(request.url);
     const friendshipId = cleanSocialText(url.searchParams.get("friendshipId"), 80);
+    const markRead = url.searchParams.get("markRead") !== "false";
     await requireFriendship(friendshipId, account.id);
     const result = await supabaseRestFetch<MessageRow[]>(
       `social_messages?friendship_id=eq.${encodeSupabaseFilter(friendshipId)}&select=id,friendship_id,sender_id,body,message_type,created_at,read_at&order=created_at.asc&limit=300`,
     );
     if (!result.ok) throw new Error(result.error);
-    void supabaseRestFetch(
-      `social_messages?friendship_id=eq.${encodeSupabaseFilter(friendshipId)}&sender_id=neq.${encodeSupabaseFilter(account.id)}&read_at=is.null`,
-      { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ read_at: new Date().toISOString() }) },
-    );
+    if (markRead) {
+      void supabaseRestFetch(
+        `social_messages?friendship_id=eq.${encodeSupabaseFilter(friendshipId)}&sender_id=neq.${encodeSupabaseFilter(account.id)}&read_at=is.null`,
+        { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ read_at: new Date().toISOString() }) },
+      );
+    }
     return Response.json({ ok: true, messages: result.data.map(toMessage) });
   } catch (err) {
     return socialErrorResponse(err);

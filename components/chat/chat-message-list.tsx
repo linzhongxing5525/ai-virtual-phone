@@ -15,6 +15,8 @@ import { GroupCreateModal } from "./group-create-modal";
 import { formatChatUiTime } from "@/lib/chat-time";
 import { kvSet } from "@/lib/kv-db";
 import { ChatFallbackAvatar } from "./chat-fallback-avatar";
+import type { SocialFriend } from "@/lib/social-client";
+import type { SocialConversationPreview } from "./use-unified-social-directory";
 import {
     getMascotLastPreview,
     getMascotChatSnapshot,
@@ -46,9 +48,12 @@ type ChatMessageListProps = {
     activeSession: ChatSession | null;
     onSelectSession: (session: ChatSession | null) => void;
     onSelectMascot: () => void;
+    socialFriends: SocialFriend[];
+    socialPreviews: Record<string, SocialConversationPreview>;
+    onSelectSocialFriend: (friend: SocialFriend, options?: { groupName?: string; characterIds?: string[] }) => void;
 };
 
-export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, onSelectMascot }: ChatMessageListProps) {
+export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, onSelectMascot, socialFriends, socialPreviews, onSelectSocialFriend }: ChatMessageListProps) {
     const [sessions, setSessions] = useState<ChatSession[]>([]);
     const [listFilter, setListFilter] = useState("");
     const [listTab, setListTab] = useState<"all" | "private" | "group">("all");
@@ -242,7 +247,19 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                                     <SessionItem session={s} onSelect={() => onSelectSession(s)} isPinned={!!s.isPinned} />
                                 </div>
                             ));
-                            if (!showMascot && regularItems.length === 0) {
+                            const socialItems = listTab !== "group"
+                                ? socialFriends
+                                    .filter(friend => !keyword || friend.profile.displayName.toLowerCase().includes(keyword) || friend.profile.username.toLowerCase().includes(keyword))
+                                    .map(friend => (
+                                        <SocialSessionItem
+                                            key={`social-${friend.friendshipId}`}
+                                            friend={friend}
+                                            preview={socialPreviews[friend.friendshipId]}
+                                            onSelect={() => onSelectSocialFriend(friend)}
+                                        />
+                                    ))
+                                : [];
+                            if (!showMascot && regularItems.length === 0 && socialItems.length === 0) {
                                 return (
                                     <div className="px-5 py-10 text-center text-[var(--c-icon)] ts-14">
                                         暂无聊天记录，点击右上角「+」发起聊天
@@ -260,6 +277,7 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
                                             onSelect={onSelectMascot}
                                         />
                                     )}
+                                    {socialItems}
                                     {regularItems}
                                 </>
                             );
@@ -502,6 +520,11 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
             {showContactPicker && (
                 <ContactPicker
                     onClose={() => setShowContactPicker(false)}
+                    socialFriends={socialFriends}
+                    onSelectSocial={friend => {
+                        onSelectSocialFriend(friend);
+                        setShowContactPicker(false);
+                    }}
                     onSelect={(charId) => {
                         const session = createOrGetSession(charId);
                         setSessions(loadChatSessions());
@@ -515,7 +538,13 @@ export function ChatMessageList({ onCloseApp, activeSession, onSelectSession, on
             {showGroupCreate && (
                 <GroupCreateModal
                     onClose={() => setShowGroupCreate(false)}
-                    onCreate={(groupName, participantIds, isSpectator) => {
+                    socialFriends={socialFriends}
+                    onCreate={(groupName, participantIds, isSpectator, socialFriend) => {
+                        if (socialFriend) {
+                            onSelectSocialFriend(socialFriend, { groupName, characterIds: participantIds });
+                            setShowGroupCreate(false);
+                            return;
+                        }
                         const newSession = createGroupSession(groupName, participantIds, { isSpectator });
                         const userName = resolveUserIdentity()?.name ?? "用户";
                         const allChars = loadCharacters();
@@ -592,7 +621,12 @@ function MascotSessionItem({
     );
 }
 
-function ContactPicker({ onClose, onSelect }: { onClose: () => void; onSelect: (charId: string) => void }) {
+function ContactPicker({ onClose, onSelect, socialFriends, onSelectSocial }: {
+    onClose: () => void;
+    onSelect: (charId: string) => void;
+    socialFriends: SocialFriend[];
+    onSelectSocial: (friend: SocialFriend) => void;
+}) {
     const contacts = loadChatContacts();
     const chars = loadCharacters();
 
@@ -604,10 +638,18 @@ function ContactPicker({ onClose, onSelect }: { onClose: () => void; onSelect: (
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-dialog" onClick={e => e.stopPropagation()}>
                 <span className="modal-header-title">选择联系人</span>
-                {enrichedContacts.length === 0 ? (
+                {enrichedContacts.length === 0 && socialFriends.length === 0 ? (
                     <span className="menu-desc">暂无联系人，请先添加好友</span>
                 ) : (
                     <div className="chat-contact-list">
+                        {socialFriends.map(friend => (
+                            <div key={`social-${friend.friendshipId}`} className="chat-contact-item" onClick={() => onSelectSocial(friend)}>
+                                <div className="chat-contact-avatar grid place-items-center bg-gradient-to-br from-violet-400 to-sky-400 font-semibold text-white">
+                                    {friend.profile.displayName.slice(0, 1)}
+                                </div>
+                                <span className="chat-contact-name">{friend.profile.displayName}</span>
+                            </div>
+                        ))}
                         {enrichedContacts.map(c => (
                             <div
                                 key={c.characterId}
@@ -626,6 +668,43 @@ function ContactPicker({ onClose, onSelect }: { onClose: () => void; onSelect: (
                         ))}
                     </div>
                 )}
+            </div>
+        </div>
+    );
+}
+
+function SocialSessionItem({ friend, preview, onSelect }: {
+    friend: SocialFriend;
+    preview?: SocialConversationPreview;
+    onSelect: () => void;
+}) {
+    let groupName = "";
+    if (typeof window !== "undefined") {
+        try {
+            const raw = window.localStorage.getItem(`ai_phone_shared_world_${friend.friendshipId}_group`);
+            const parsed = raw ? JSON.parse(raw) as { groupName?: unknown } : null;
+            groupName = typeof parsed?.groupName === "string" ? parsed.groupName : "";
+        } catch { /* ignore malformed local room settings */ }
+    }
+    const last = preview?.message;
+    const text = last
+        ? `${last.actor?.type === "ai" ? `${last.actor.name}：` : ""}${last.body}`
+        : "真人好友 · 点击开始聊天";
+    return (
+        <div className="minimal-list-item" onClick={onSelect}>
+            <div className="minimal-avatar-wrapper grid place-items-center bg-gradient-to-br from-violet-400 to-sky-400 font-semibold text-white">
+                {friend.profile.displayName.slice(0, 1)}
+                <span className="minimal-online-dot" />
+            </div>
+            <div className="flex-1 overflow-hidden h-[48px] flex flex-col justify-center gap-1">
+                <div className="flex justify-between items-center gap-2">
+                    <span className="ts-16 font-medium text-[var(--c-text-title)] truncate">{groupName || friend.profile.displayName}</span>
+                    <span className="ts-12 text-[var(--c-icon)] font-medium">{last ? formatChatUiTime(last.createdAt) : groupName ? "群聊" : "真人"}</span>
+                </div>
+                <div className="flex justify-between items-center gap-2">
+                    <span className="ts-13 text-[var(--c-text)] opacity-80 truncate font-normal">{text}</span>
+                    {(preview?.unread ?? 0) > 0 && <span className="minimal-unread-count shrink-0">{preview?.unread}</span>}
+                </div>
             </div>
         </div>
     );

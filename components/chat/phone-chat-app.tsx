@@ -7,8 +7,10 @@ import { MomentsFeed } from "./moments-feed";
 import { ChatRoom } from "./chat-room";
 import { MascotChatRoom } from "./mascot-chat-room";
 import { UserProfilePanel } from "./user-profile-panel";
-import { RealSocialHub } from "./real-social-hub";
-import { MessageCircle, Users, Aperture, UserRound, Radio } from "lucide-react";
+import { SharedWorldChatRoom } from "./real-social-hub";
+import { useUnifiedSocialDirectory } from "./use-unified-social-directory";
+import type { SocialFriend } from "@/lib/social-client";
+import { MessageCircle, Users, Aperture, UserRound } from "lucide-react";
 import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage } from "@/lib/chat-storage";
 import { notifyMascotPageContext } from "@/lib/mascot-events";
 import { loadCharacters } from "@/lib/character-storage";
@@ -18,7 +20,26 @@ import { formatXiaohongshuShareForPrompt, type ChatSharePayload } from "@/lib/ch
 import { CHAT_OPEN_SESSION_EVENT, CHAT_OPEN_ADD_CONTACT_EVENT } from "@/lib/chat-notification-events";
 import { getMascotSettingsSnapshot } from "@/lib/mascot-settings";
 
-type TabKey = "messages" | "contacts" | "feeds" | "real" | "me";
+type TabKey = "messages" | "contacts" | "feeds" | "me";
+
+type ActiveSocialRoom = {
+    friend: SocialFriend;
+    groupName?: string;
+    characterIds?: string[];
+};
+
+function loadSocialRoomConfig(friendshipId: string): Pick<ActiveSocialRoom, "groupName" | "characterIds"> {
+    if (typeof window === "undefined") return {};
+    try {
+        const raw = window.localStorage.getItem(`ai_phone_shared_world_${friendshipId}_group`);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw) as { groupName?: unknown; characterIds?: unknown };
+        return {
+            groupName: typeof parsed.groupName === "string" ? parsed.groupName : undefined,
+            characterIds: Array.isArray(parsed.characterIds) ? parsed.characterIds.filter((id): id is string => typeof id === "string") : undefined,
+        };
+    } catch { return {}; }
+}
 
 export type PhoneChatAppProps = {
     onClose: () => void;
@@ -32,6 +53,8 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
     const [activeTab, setActiveTab] = useState<TabKey>("messages");
     const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
     const [activeMascot, setActiveMascot] = useState(false);
+    const [activeSocialRoom, setActiveSocialRoom] = useState<ActiveSocialRoom | null>(null);
+    const socialDirectory = useUnifiedSocialDirectory();
     // Chat app-level custom CSS (affects all chat pages, lower priority than per-session CSS)
     const [chatAppCSS, setChatAppCSS] = useState(() =>
         typeof window !== "undefined" ? kvGet("chat-app-custom-css") || "" : ""
@@ -73,6 +96,7 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
         if (sharePayload) {
             setActiveSession(null);
             setActiveMascot(false);
+            setActiveSocialRoom(null);
             setActiveTab("contacts");
         }
     }, [sharePayload]);
@@ -84,6 +108,7 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
             const session = loadChatSessions().find(s => s.id === sessionId);
             if (!session) return;
             setActiveMascot(false);
+            setActiveSocialRoom(null);
             setActiveSession(session);
             setActiveTab("messages");
         };
@@ -104,6 +129,7 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
             addContactReturnSessionRef.current = activeSessionIdRef.current;
             setActiveSession(null);
             setActiveMascot(false);
+            setActiveSocialRoom(null);
             setActiveTab("contacts");
             setPendingAddContactId(characterId);
         };
@@ -188,13 +214,25 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
             onShareDone?.();
         }
         setActiveMascot(false);
+        setActiveSocialRoom(null);
         setActiveSession(sess);
         setActiveTab("messages");
     };
 
     const handleSelectMascot = () => {
         setActiveSession(null);
+        setActiveSocialRoom(null);
         setActiveMascot(true);
+        setActiveTab("messages");
+    };
+
+    const handleSelectSocialFriend = (friend: SocialFriend, options?: { groupName?: string; characterIds?: string[] }) => {
+        setActiveSession(null);
+        setActiveMascot(false);
+        if (options?.groupName) {
+            window.localStorage.setItem(`ai_phone_shared_world_${friend.friendshipId}_group`, JSON.stringify(options));
+        }
+        setActiveSocialRoom({ friend, ...(options ?? loadSocialRoomConfig(friend.friendshipId)) });
         setActiveTab("messages");
     };
 
@@ -224,13 +262,17 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
             {/* Chat app-level custom CSS (lower priority than per-session CSS) */}
             {chatAppCSS && <SessionCustomCSS css={chatAppCSS} scope=".chat-app" />}
             {/* The Main Content Area */}
-            <div className="chat-main-content relative flex-1 flex flex-col overflow-hidden" {...(activeSession || activeMascot ? { "data-covered-by-room": "" } : {})}>
-                {activeTab === "messages" && <ChatMessageList onCloseApp={onClose} activeSession={activeSession} onSelectSession={(session) => { setActiveMascot(false); setActiveSession(session); }} onSelectMascot={handleSelectMascot} />}
+            <div className="chat-main-content relative flex-1 flex flex-col overflow-hidden" {...(activeSession || activeMascot || activeSocialRoom ? { "data-covered-by-room": "" } : {})}>
+                {activeTab === "messages" && <ChatMessageList onCloseApp={onClose} activeSession={activeSession} onSelectSession={(session) => { setActiveMascot(false); setActiveSocialRoom(null); setActiveSession(session); }} onSelectMascot={handleSelectMascot} socialFriends={socialDirectory.friends} socialPreviews={socialDirectory.previews} onSelectSocialFriend={handleSelectSocialFriend} />}
                 {activeTab === "contacts" && (
                     <ChatContactsList
                         onCloseApp={onClose}
                         onSelectSession={handleSelectContact}
                         onSelectMascot={handleSelectMascot}
+                        socialFriends={socialDirectory.friends}
+                        socialRequests={socialDirectory.requests}
+                        onSocialChanged={socialDirectory.refresh}
+                        onSelectSocialFriend={friend => handleSelectSocialFriend(friend)}
                         pendingAddContactId={pendingAddContactId}
                         onPendingAddContactConsumed={() => setPendingAddContactId(null)}
                         onPendingAddContactBack={() => {
@@ -245,12 +287,11 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                     />
                 )}
                 {activeTab === "feeds" && <MomentsFeed onCloseApp={onClose} />}
-                {activeTab === "real" && <RealSocialHub onCloseApp={() => setActiveTab("messages")} />}
                 {activeTab === "me" && <UserProfilePanel onClose={() => setActiveTab("messages")} />}
             </div>
 
             {/* Bottom Navigation Bar — hide when inside a chat room */}
-            <nav className="chat-tab-bar chat-bottom-glass-bar" data-ui="nav" style={{ display: activeSession || activeMascot || hideTabBar || activeTab === "real" ? "none" : undefined }}>
+            <nav className="chat-tab-bar chat-bottom-glass-bar" data-ui="nav" style={{ display: activeSession || activeMascot || activeSocialRoom || hideTabBar ? "none" : undefined }}>
                 <button
                     className={`chat-tab ${activeTab === "messages" ? "chat-tab-active" : ""}`}
                     onClick={() => setActiveTab("messages")}
@@ -273,13 +314,6 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                     <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "feeds" ? undefined : "var(--c-text)" }}>动态</span>
                 </button>
                 <button
-                    className={`chat-tab ${activeTab === "real" ? "chat-tab-active" : ""}`}
-                    onClick={() => setActiveTab("real")}
-                >
-                    <Radio fill="none" stroke="currentColor" strokeWidth={activeTab === "real" ? 1.8 : 1.7} size={20} />
-                    <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "real" ? undefined : "var(--c-text)" }}>真人</span>
-                </button>
-                <button
                     className={`chat-tab ${activeTab === "me" ? "chat-tab-active" : ""}`}
                     onClick={() => setActiveTab("me")}
                 >
@@ -299,6 +333,18 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                     <MascotChatRoom
                         onBack={() => setActiveMascot(false)}
                         onDeleted={() => setActiveMascot(false)}
+                    />
+                </div>
+            )}
+            {activeSocialRoom && socialDirectory.account && (
+                <div className="chat-room-layer absolute inset-0">
+                    <SharedWorldChatRoom
+                        accountId={socialDirectory.account.id}
+                        accountProfile={socialDirectory.account}
+                        friend={activeSocialRoom.friend}
+                        groupName={activeSocialRoom.groupName}
+                        allowedCharacterIds={activeSocialRoom.characterIds}
+                        onBack={() => { setActiveSocialRoom(null); void socialDirectory.refresh(); }}
                     />
                 </div>
             )}

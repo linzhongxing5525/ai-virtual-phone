@@ -2172,10 +2172,11 @@ function VoiceMessageBubble({ msg, characterId, onUpdate, defaultTranslationExpa
         setSynthesizing(true);
         (async () => {
             try {
-                const { resolveVoiceConfig, synthesizeSpeech } = await import("@/lib/tts-service");
+                const { resolveVoiceConfig, synthesizeSpeech, inferSpeechEmotion, prepareSpeechText } = await import("@/lib/tts-service");
                 const vc = resolveVoiceConfig(characterId);
                 if (!vc || cancelled) { setSynthesizing(false); return; }
-                const blob = await synthesizeSpeech(speechText, vc);
+                const preparedSpeech = prepareSpeechText(speechText);
+                const blob = await synthesizeSpeech(preparedSpeech, vc, { emotion: inferSpeechEmotion(speechText, preparedSpeech) });
                 if (cancelled || !blob) { setSynthesizing(false); return; }
                 // Convert to base64 data URL and persist
                 const reader = new FileReader();

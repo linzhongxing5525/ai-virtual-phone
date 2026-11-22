@@ -9,7 +9,7 @@ import { generateChatCompletion, flattenCompletionResult } from "@/lib/chat-engi
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { cancelFollowUp } from "@/lib/follow-up-service";
 import { createSTTSession, type STTSession } from "@/lib/stt-service";
-import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob, inferSpeechEmotion } from "@/lib/tts-service";
+import { resolveVoiceConfig, synthesizeSpeech, playAudioBlob, inferSpeechEmotion, prepareSpeechText } from "@/lib/tts-service";
 import { suspendKeepAliveForCall, resumeKeepAliveAfterCall } from "@/lib/use-weixin-bridge";
 import { BilingualTextBlock } from "./message-bubble";
 import { splitBilingualText } from "@/lib/bilingual-text";
@@ -391,7 +391,7 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
 
             const { cleanParts } = processAIResponse(aiResponseText);
             const displayText = cleanParts.join("\n");
-            const speechText = stripBilingualForSpeech(displayText);
+            const speechText = prepareSpeechText(stripBilingualForSpeech(displayText));
 
             if (!displayText) { setCallState("IDLE"); return; }
 
@@ -401,7 +401,7 @@ export function VideoCallScreen({ session, character, onEnd, onConnect, initiato
             const voiceConfig = resolveVoiceConfig(session.contactId);
             if (voiceConfig && !isSpeakerMutedRef.current) {
                 try {
-                    const emotion = inferSpeechEmotion(aiResponseText, speechText);
+                    const emotion = inferSpeechEmotion(displayText, speechText);
                     const audioBlob = await synthesizeSpeech(speechText, voiceConfig, { emotion });
                     if (stateRef.current === "ENDED") return;
                     if (audioBlob && !isSpeakerMutedRef.current) {

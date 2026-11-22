@@ -40,7 +40,7 @@ export const socialApi = {
   friendAction: async (action: string, input: JsonRecord = {}) => socialFetch<{ ok: true }>("/api/social/friends", {
     method: "POST", body: JSON.stringify({ action, ...input }),
   }),
-  messages: async (friendshipId: string) => (await socialFetch<{ ok: true; messages: SocialMessage[] }>(`/api/social/messages?friendshipId=${encodeURIComponent(friendshipId)}`)).messages,
+  messages: async (friendshipId: string, options: { markRead?: boolean } = {}) => (await socialFetch<{ ok: true; messages: SocialMessage[] }>(`/api/social/messages?friendshipId=${encodeURIComponent(friendshipId)}${options.markRead === false ? "&markRead=false" : ""}`)).messages,
   sendMessage: async (friendshipId: string, body: string) => socialFetch<{ ok: true; message: SocialMessage }>("/api/social/messages", {
     method: "POST", body: JSON.stringify({ friendshipId, body }),
   }),
