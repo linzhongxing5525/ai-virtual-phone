@@ -7,7 +7,8 @@ import { MomentsFeed } from "./moments-feed";
 import { ChatRoom } from "./chat-room";
 import { MascotChatRoom } from "./mascot-chat-room";
 import { UserProfilePanel } from "./user-profile-panel";
-import { MessageCircle, Users, Aperture, UserRound } from "lucide-react";
+import { RealSocialHub } from "./real-social-hub";
+import { MessageCircle, Users, Aperture, UserRound, Radio } from "lucide-react";
 import { ChatSession, loadChatSessions, pushChatMessage, hydrateChatStorage } from "@/lib/chat-storage";
 import { notifyMascotPageContext } from "@/lib/mascot-events";
 import { loadCharacters } from "@/lib/character-storage";
@@ -17,7 +18,7 @@ import { formatXiaohongshuShareForPrompt, type ChatSharePayload } from "@/lib/ch
 import { CHAT_OPEN_SESSION_EVENT, CHAT_OPEN_ADD_CONTACT_EVENT } from "@/lib/chat-notification-events";
 import { getMascotSettingsSnapshot } from "@/lib/mascot-settings";
 
-type TabKey = "messages" | "contacts" | "feeds" | "me";
+type TabKey = "messages" | "contacts" | "feeds" | "real" | "me";
 
 export type PhoneChatAppProps = {
     onClose: () => void;
@@ -244,11 +245,12 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                     />
                 )}
                 {activeTab === "feeds" && <MomentsFeed onCloseApp={onClose} />}
+                {activeTab === "real" && <RealSocialHub onCloseApp={() => setActiveTab("messages")} />}
                 {activeTab === "me" && <UserProfilePanel onClose={() => setActiveTab("messages")} />}
             </div>
 
             {/* Bottom Navigation Bar — hide when inside a chat room */}
-            <nav className="chat-tab-bar chat-bottom-glass-bar" data-ui="nav" style={{ display: activeSession || activeMascot || hideTabBar ? "none" : undefined }}>
+            <nav className="chat-tab-bar chat-bottom-glass-bar" data-ui="nav" style={{ display: activeSession || activeMascot || hideTabBar || activeTab === "real" ? "none" : undefined }}>
                 <button
                     className={`chat-tab ${activeTab === "messages" ? "chat-tab-active" : ""}`}
                     onClick={() => setActiveTab("messages")}
@@ -269,6 +271,13 @@ export const PhoneChatApp = memo(function PhoneChatApp({ onClose, initialSession
                 >
                     <CompassIcon active={activeTab === "feeds"} />
                     <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "feeds" ? undefined : "var(--c-text)" }}>动态</span>
+                </button>
+                <button
+                    className={`chat-tab ${activeTab === "real" ? "chat-tab-active" : ""}`}
+                    onClick={() => setActiveTab("real")}
+                >
+                    <Radio fill="none" stroke="currentColor" strokeWidth={activeTab === "real" ? 1.8 : 1.7} size={20} />
+                    <span style={{ fontSize: "calc(10px*var(--app-text-scale,1))", color: activeTab === "real" ? undefined : "var(--c-text)" }}>真人</span>
                 </button>
                 <button
                     className={`chat-tab ${activeTab === "me" ? "chat-tab-active" : ""}`}
