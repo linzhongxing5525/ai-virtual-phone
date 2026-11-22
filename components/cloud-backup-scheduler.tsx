@@ -42,7 +42,7 @@ export function CloudBackupScheduler() {
         backupRunning = true;
         try {
           // Cloud uploads are chunked, so large media is fine — always back up in full.
-          await runCloudBackup(config, { excludeMedia: false });
+          await runCloudBackup(config, { excludeMedia: config.excludeMedia });
         } catch {
           /* silent — surfaced in the data page status on next open */
         } finally {

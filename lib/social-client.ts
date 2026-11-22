@@ -5,7 +5,8 @@ import { RealtimeChannel, RealtimeClient } from "@supabase/realtime-js";
 export type SocialProfile = { id: string; username: string; displayName: string };
 export type SocialFriend = { friendshipId: string; createdAt: string; profile: SocialProfile };
 export type SocialFriendRequest = { id: string; incoming: boolean; message: string; createdAt: string; profile: SocialProfile };
-export type SocialMessage = { id: string; friendshipId: string; senderId: string; body: string; type: string; createdAt: string; readAt: string | null };
+export type SocialMessageActor = { type: "ai"; name: string; ownerId: string; localId: string };
+export type SocialMessage = { id: string; friendshipId: string; senderId: string; body: string; type: string; actor: SocialMessageActor | null; createdAt: string; readAt: string | null };
 export type SocialPost = {
   id: string;
   authorId: string;
@@ -42,6 +43,9 @@ export const socialApi = {
   messages: async (friendshipId: string) => (await socialFetch<{ ok: true; messages: SocialMessage[] }>(`/api/social/messages?friendshipId=${encodeURIComponent(friendshipId)}`)).messages,
   sendMessage: async (friendshipId: string, body: string) => socialFetch<{ ok: true; message: SocialMessage }>("/api/social/messages", {
     method: "POST", body: JSON.stringify({ friendshipId, body }),
+  }),
+  sendAiMessage: async (friendshipId: string, actor: { localId: string; name: string }, body: string) => socialFetch<{ ok: true; message: SocialMessage }>("/api/social/messages", {
+    method: "POST", body: JSON.stringify({ friendshipId, body, actor: { type: "ai", ...actor } }),
   }),
   posts: async () => (await socialFetch<{ ok: true; posts: SocialPost[] }>("/api/social/posts")).posts,
   postAction: async (action: string, input: JsonRecord = {}) => socialFetch<{ ok: true }>("/api/social/posts", {

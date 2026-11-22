@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, Check, Heart, Headphones, Loader2, MessageCircle, Music2,
-  Plus, Search, Send, UserPlus, Users, X,
+  ArrowLeft, Bot, Check, Heart, Headphones, Loader2, MessageCircle, Music2,
+  Plus, Search, Send, Sparkles, UserPlus, Users, X,
 } from "lucide-react";
 
 import { fetchCurrentAccount } from "@/lib/account-client";
 import { useMusicPlayerOptional } from "@/lib/music-context";
 import type { MusicTrack } from "@/lib/music-storage";
+import { generateSharedWorldReply, loadSharedWorldCharacters } from "@/lib/shared-world-ai";
 import {
   notifySocialTopic,
   SocialRealtimeChannel,
@@ -25,6 +26,7 @@ type HubMode = "chats" | "friends" | "posts" | "listen";
 export function RealSocialHub({ onCloseApp }: { onCloseApp: () => void }) {
   const [mode, setMode] = useState<HubMode>("chats");
   const [accountId, setAccountId] = useState("");
+  const [accountProfile, setAccountProfile] = useState<SocialProfile | null>(null);
   const [friends, setFriends] = useState<SocialFriend[]>([]);
   const [requests, setRequests] = useState<SocialFriendRequest[]>([]);
   const [posts, setPosts] = useState<SocialPost[]>([]);
@@ -60,6 +62,7 @@ export function RealSocialHub({ onCloseApp }: { onCloseApp: () => void }) {
         return;
       }
       setAccountId(result.account.id);
+      setAccountProfile({ id: result.account.id, username: result.account.username, displayName: result.account.displayName });
       await refresh();
       if (cancelled) return;
       userChannel.current = await SocialRealtimeChannel.connect(result.account.id, {
@@ -97,6 +100,7 @@ export function RealSocialHub({ onCloseApp }: { onCloseApp: () => void }) {
     return (
       <RealChatRoom
         accountId={accountId}
+        accountProfile={accountProfile ?? { id: accountId, username: "me", displayName: "我" }}
         friend={selectedFriend}
         onBack={() => { setSelectedFriend(null); void loadFriends(); }}
       />
@@ -111,8 +115,8 @@ export function RealSocialHub({ onCloseApp }: { onCloseApp: () => void }) {
             <ArrowLeft size={21} />
           </button>
           <div className="min-w-0 flex-1">
-            <div className="text-[17px] font-semibold">真人互通</div>
-            <div className="text-[11px] opacity-55">真人好友与 AI 角色完全分开</div>
+            <div className="text-[17px] font-semibold">共享世界</div>
+            <div className="text-[11px] opacity-55">真人好友和双方 AI 角色可以同场互动</div>
           </div>
           <button className="rounded-full p-2 hover:bg-black/5" onClick={() => void refresh()} aria-label="刷新">
             <Loader2 size={18} className={loading ? "animate-spin" : ""} />
@@ -241,13 +245,25 @@ function FriendsPanel({ friends, requests, onSelect, onAction, onChanged, onErro
   </div>;
 }
 
-function RealChatRoom({ accountId, friend, onBack }: { accountId: string; friend: SocialFriend; onBack: () => void }) {
+function RealChatRoom({ accountId, accountProfile, friend, onBack }: { accountId: string; accountProfile: SocialProfile; friend: SocialFriend; onBack: () => void }) {
   const [messages, setMessages] = useState<SocialMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  const [characters] = useState(() => loadSharedWorldCharacters());
+  const storagePrefix = `ai_phone_shared_world_${friend.friendshipId}`;
+  const [selectedCharacterId, setSelectedCharacterId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(`${storagePrefix}_character`) ?? "";
+  });
+  const [autoJoin, setAutoJoin] = useState(() => typeof window !== "undefined" && window.localStorage.getItem(`${storagePrefix}_auto`) === "true");
+  const [includeMemory, setIncludeMemory] = useState(() => typeof window !== "undefined" && window.localStorage.getItem(`${storagePrefix}_memory`) === "true");
+  const [aiGenerating, setAiGenerating] = useState(false);
   const channelRef = useRef<SocialRealtimeChannel | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const seenHumanMessages = useRef<Set<string>>(new Set());
+  const initializedMessages = useRef(false);
+  const selectedCharacter = characters.find(character => character.id === selectedCharacterId) ?? null;
 
   const reload = useCallback(async () => {
     try { setMessages(await socialApi.messages(friend.friendshipId)); }
@@ -266,6 +282,60 @@ function RealChatRoom({ accountId, friend, onBack }: { accountId: string; friend
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages.length]);
 
+  useEffect(() => {
+    if (!selectedCharacterId && characters[0]) setSelectedCharacterId(characters[0].id);
+  }, [characters, selectedCharacterId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (selectedCharacterId) window.localStorage.setItem(`${storagePrefix}_character`, selectedCharacterId);
+  }, [selectedCharacterId, storagePrefix]);
+
+  const inviteAi = useCallback(async (sourceMessages: SocialMessage[] = messages) => {
+    if (!selectedCharacter || aiGenerating) return;
+    setAiGenerating(true); setError("");
+    try {
+      const reply = await generateSharedWorldReply({
+        character: selectedCharacter,
+        messages: sourceMessages,
+        self: accountProfile,
+        friend,
+        includeMemory,
+      });
+      await socialApi.sendAiMessage(friend.friendshipId, { localId: selectedCharacter.id, name: selectedCharacter.name }, reply);
+      await reload();
+      await channelRef.current?.send("refresh");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAiGenerating(false);
+    }
+  }, [accountProfile, aiGenerating, friend, includeMemory, messages, reload, selectedCharacter]);
+
+  useEffect(() => {
+    const humanMessages = messages.filter(message => !message.actor);
+    if (!initializedMessages.current) {
+      humanMessages.forEach(message => seenHumanMessages.current.add(message.id));
+      initializedMessages.current = true;
+      return;
+    }
+    const arrived = humanMessages.filter(message => !seenHumanMessages.current.has(message.id));
+    humanMessages.forEach(message => seenHumanMessages.current.add(message.id));
+    if (arrived.length > 0 && autoJoin && selectedCharacter && !aiGenerating) void inviteAi(messages);
+  }, [aiGenerating, autoJoin, inviteAi, messages, selectedCharacter]);
+
+  const toggleAutoJoin = () => {
+    const next = !autoJoin;
+    setAutoJoin(next);
+    window.localStorage.setItem(`${storagePrefix}_auto`, String(next));
+  };
+
+  const toggleMemory = () => {
+    const next = !includeMemory;
+    setIncludeMemory(next);
+    window.localStorage.setItem(`${storagePrefix}_memory`, String(next));
+  };
+
   const send = async () => {
     const text = draft.trim(); if (!text || sending) return;
     setSending(true); setDraft(""); setError("");
@@ -275,10 +345,13 @@ function RealChatRoom({ accountId, friend, onBack }: { accountId: string; friend
   };
 
   return <div className="absolute inset-0 flex flex-col bg-[var(--c-bg)] text-[var(--c-text)]">
-    <header className="flex shrink-0 items-center gap-3 border-b border-black/5 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))]"><button className="p-2" onClick={onBack}><ArrowLeft size={21} /></button><Avatar profile={friend.profile} size={36} /><div><div className="text-[14px] font-semibold">{friend.profile.displayName}</div><div className="text-[10px] opacity-45">真人好友 · @{friend.profile.username}</div></div></header>
+    <header className="flex shrink-0 items-center gap-3 border-b border-black/5 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))]"><button className="p-2" onClick={onBack}><ArrowLeft size={21} /></button><Avatar profile={friend.profile} size={36} /><div className="min-w-0 flex-1"><div className="truncate text-[14px] font-semibold">和 {friend.profile.displayName} 的共享世界</div><div className="text-[10px] opacity-45">两位真人 · 双方 AI 都能加入</div></div></header>
     {error && <div className="mx-4 mt-2 rounded-xl bg-red-500/10 px-3 py-2 text-[11px] text-red-600">{error}</div>}
-    <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4"><div className="space-y-3">{messages.map(message => { const mine = message.senderId === accountId; return <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}><div className={`max-w-[78%] rounded-2xl px-3 py-2 text-[13px] leading-5 ${mine ? "rounded-br-md bg-[var(--c-accent)] text-white" : "rounded-bl-md bg-[var(--c-card)]"}`}><div className="whitespace-pre-wrap break-words">{message.body}</div><div className={`mt-1 text-right text-[9px] ${mine ? "text-white/65" : "opacity-40"}`}>{formatTime(message.createdAt)}</div></div></div>; })}<div ref={endRef} /></div></main>
-    <footer className="flex shrink-0 items-end gap-2 border-t border-black/5 bg-[var(--c-bg)] px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2"><textarea className="max-h-28 min-h-10 flex-1 resize-none rounded-2xl bg-[var(--c-card)] px-3 py-2 text-[13px] outline-none" value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder="发消息给真人好友" /><button className="grid h-10 w-10 place-items-center rounded-full bg-[var(--c-accent)] text-white disabled:opacity-40" disabled={!draft.trim() || sending} onClick={() => void send()}>{sending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}</button></footer>
+    <div className="shrink-0 border-b border-black/5 bg-[var(--c-card)]/55 px-3 py-2">
+      {characters.length > 0 ? <><div className="flex items-center gap-2"><Bot size={16} className="shrink-0 opacity-55" /><select className="min-w-0 flex-1 rounded-xl bg-[var(--c-card)] px-2 py-2 text-[11px] outline-none" value={selectedCharacterId} onChange={event => setSelectedCharacterId(event.target.value)} aria-label="选择加入共享世界的AI角色">{characters.map(character => <option key={character.id} value={character.id}>{character.name}</option>)}</select><button className="flex shrink-0 items-center gap-1 rounded-xl bg-[var(--c-accent)] px-3 py-2 text-[11px] text-white disabled:opacity-40" disabled={!selectedCharacter || aiGenerating} onClick={() => void inviteAi()}>{aiGenerating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}请他接话</button></div><div className="mt-2 flex flex-wrap gap-2 text-[10px]"><button className={`rounded-full px-3 py-1.5 ${autoJoin ? "bg-[var(--c-accent)] text-white" : "bg-black/5 opacity-65"}`} onClick={toggleAutoJoin}>自动参与 {autoJoin ? "开" : "关"}</button><button className={`rounded-full px-3 py-1.5 ${includeMemory ? "bg-amber-500 text-white" : "bg-black/5 opacity-65"}`} onClick={toggleMemory}>结合本地记忆 {includeMemory ? "开" : "关"}</button></div></> : <div className="text-[11px] opacity-55">本机还没有 AI 角色，创建角色后就能邀请他加入共享世界。</div>}
+    </div>
+    <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4"><div className="space-y-3">{messages.length === 0 && <div className="py-12 text-center text-[11px] opacity-40">先由真人说句话，或邀请一个 AI 角色开启共同剧情。</div>}{messages.map(message => { const mine = message.senderId === accountId; const isAi = message.actor?.type === "ai"; const ownerName = mine ? accountProfile.displayName : friend.profile.displayName; return <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}><div className={`max-w-[82%] rounded-2xl px-3 py-2 text-[13px] leading-5 ${isAi ? (mine ? "rounded-br-md bg-violet-500 text-white" : "rounded-bl-md bg-sky-500/15") : mine ? "rounded-br-md bg-[var(--c-accent)] text-white" : "rounded-bl-md bg-[var(--c-card)]"}`}>{isAi && <div className={`mb-1 flex items-center gap-1 text-[9px] font-semibold ${mine ? "text-white/75" : "text-sky-700/70"}`}><Bot size={11} />{message.actor?.name} · {ownerName}的AI</div>}<div className="whitespace-pre-wrap break-words">{message.body}</div><div className={`mt-1 text-right text-[9px] ${mine && !isAi ? "text-white/65" : mine && isAi ? "text-white/65" : "opacity-40"}`}>{formatTime(message.createdAt)}</div></div></div>; })}<div ref={endRef} /></div></main>
+    <footer className="flex shrink-0 items-end gap-2 border-t border-black/5 bg-[var(--c-bg)] px-3 pb-[max(10px,env(safe-area-inset-bottom))] pt-2"><textarea className="max-h-28 min-h-10 flex-1 resize-none rounded-2xl bg-[var(--c-card)] px-3 py-2 text-[13px] outline-none" value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder="以真人身份说话…" /><button className="grid h-10 w-10 place-items-center rounded-full bg-[var(--c-accent)] text-white disabled:opacity-40" disabled={!draft.trim() || sending} onClick={() => void send()}>{sending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}</button></footer>
   </div>;
 }
 

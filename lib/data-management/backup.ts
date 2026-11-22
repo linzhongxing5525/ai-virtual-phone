@@ -9,6 +9,7 @@ import type {
   ClearResult,
   DataModuleId,
   DataSnapshot,
+  DataSource,
   ImportOptions,
   ImportResult,
   ModulePayload,
@@ -96,6 +97,36 @@ export type BackupOptions = {
 // Modules whose media is kept even in "exclude media" mode (avatars are identity).
 const MEDIA_KEEP_MODULE_IDS = new Set<DataModuleId>(["characters"]);
 
+// These databases contain only large binary/media payloads. In lightweight
+// mode, do not open or cursor through them at all. Reading every Blob into
+// memory and stripping it afterwards is exactly what made mobile exports and
+// cloud backups appear frozen at 2%.
+const MEDIA_ONLY_DATABASES = new Set([
+  "AiPhoneMediaCacheDB",
+  "ai_phone_theme_db_v1",
+  "reading-raw-files",
+  "reading-appearance-assets",
+  "ai_phone_music_db_v1",
+  "world-builder-models",
+]);
+
+function exportSourcesFor(dataModule: ReturnType<typeof getSelectedModules>[number], excludeMedia: boolean): DataSource[] {
+  if (!excludeMedia || MEDIA_KEEP_MODULE_IDS.has(dataModule.id)) return dataModule.sources;
+  return dataModule.sources.filter(source => source.type !== "indexeddb" || !MEDIA_ONLY_DATABASES.has(source.dbName));
+}
+
+function countPayloadRecords(payload: ModulePayload): number {
+  let records = 0;
+  for (const source of payload.sources) {
+    if (source.type === "indexeddb") {
+      for (const store of source.stores) records += store.records.length;
+    } else {
+      records += source.records.length;
+    }
+  }
+  return records;
+}
+
 const MEDIA_DATAURL_RE = /^data:(?:image|audio|video|application\/octet-stream)/i;
 const MEDIA_MIN_BYTES = 2048;
 
@@ -164,25 +195,17 @@ export async function buildSingleModulePayload(
   // remove it; extracting to media-refs first would make "exclude media" a no-op.
   const moduleCollector = stripping ? undefined : collector;
   let sources: SourceBackup[] = [];
-  for (const source of dataModule.sources) {
+  for (const source of exportSourcesFor(dataModule, stripping)) {
     sources.push(await exportSource(source, moduleCollector));
   }
   if (stripping) {
     sources = sources.map(stripMediaFromSource);
   }
-  let records = 0;
-  for (const sourcePayload of sources) {
-    if (sourcePayload.type === "indexeddb") {
-      for (const store of sourcePayload.stores) records += store.records.length;
-    } else {
-      records += sourcePayload.records.length;
-    }
-  }
-  return { payload: { moduleId: dataModule.id, sources }, records };
+  const payload = { moduleId: dataModule.id, sources };
+  return { payload, records: countPayloadRecords(payload) };
 }
 
 async function buildEnvelope(moduleIds?: DataModuleId[], options: BackupOptions = {}, collector?: MediaCollector): Promise<BackupEnvelope> {
-  const snapshot = await inspectData();
   const selectedModules = getSelectedModules(moduleIds);
   const modulePayloads: ModulePayload[] = [];
 
@@ -193,7 +216,7 @@ async function buildEnvelope(moduleIds?: DataModuleId[], options: BackupOptions 
     // not media-ref objects). Otherwise "exclude media" silently keeps everything.
     const moduleCollector = stripping ? undefined : collector;
     let sources = [];
-    for (const source of dataModule.sources) {
+    for (const source of exportSourcesFor(dataModule, stripping)) {
       sources.push(await exportSource(source, moduleCollector));
     }
     if (stripping) {
@@ -203,17 +226,12 @@ async function buildEnvelope(moduleIds?: DataModuleId[], options: BackupOptions 
   }
 
   const manifestModules = modulePayloads.map((payload) => {
-    const stats = snapshot.modules.find((item) => item.moduleId === payload.moduleId);
     const definition = DATA_MODULES.find((item) => item.id === payload.moduleId);
-    // When media is stripped, recompute bytes from the actual (smaller) payload.
-    const bytes = options.excludeMedia
-      ? new Blob([JSON.stringify(payload)]).size
-      : stats?.bytes ?? 0;
     return {
       id: payload.moduleId,
       label: definition?.label ?? payload.moduleId,
-      records: stats?.records ?? 0,
-      bytes,
+      records: countPayloadRecords(payload),
+      bytes: new Blob([JSON.stringify(payload)]).size,
     };
   });
 
